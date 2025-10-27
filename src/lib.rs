@@ -43,7 +43,7 @@ pub mod tensor;
 pub mod training;
 
 pub use config::EngineConfig;
-pub use dream::{SimpleDreamPool};
+pub use dream::{SimpleDreamPool, BiasProfile, ClassBias, SpectralBias, ChromaBias};
 pub use learner::{ColorClassifier, MLPClassifier, ClassifierConfig};
 pub use learner::feedback::{FeedbackRecord, UtilityAggregator, ClassUtilityStats};
 pub use learner::training::{TrainingConfig, TrainingResult, train_with_dreams, train_baseline};
