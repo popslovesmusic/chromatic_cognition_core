@@ -1,21 +1,14 @@
 {
   "permissions": {
     "allow": [
+      "Bash(mkdir:*)",
       "Bash(cargo test:*)",
-      "Bash(cargo run:*)",
-      "Bash(cargo doc:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git push:*)",
-      "Bash(git fetch:*)",
-      "Bash(git pull:*)",
-      "Bash(git checkout:*)",
-      "Bash(cargo clean:*)",
-      "Bash(cat:*)",
-      "Bash(cargo check:*)",
       "Bash(cargo build:*)",
-      "Read(//d/isoG/New-folder/sase_amp_fixed/**)",
-      "Bash(cargo add:*)"
+      "Bash(./target/release/examples/dream_validation_full.exe:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(awk:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
