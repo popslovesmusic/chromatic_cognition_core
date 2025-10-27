@@ -2,8 +2,6 @@
 //!
 //! In-memory ANN-lite supporting cosine and euclidean similarity.
 
-use std::collections::HashMap;
-
 /// Unique identifier for indexed entries
 pub type EntryId = uuid::Uuid;
 

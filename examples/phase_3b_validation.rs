@@ -12,15 +12,15 @@
 //! 2. Phase 3A: Original Dream Pool (cosine similarity only)
 //! 3. Phase 3B: Refined Dream Pool (all enhancements)
 
-use chromatic_cognition_core::data::{ColorDataset, DatasetConfig, ColorSample, ColorClass};
-use chromatic_cognition_core::dream::{SimpleDreamPool, BiasProfile};
-use chromatic_cognition_core::learner::{MLPClassifier, ClassifierConfig};
+use chromatic_cognition_core::data::{ColorClass, ColorDataset, ColorSample, DatasetConfig};
+use chromatic_cognition_core::dream::simple_pool::PoolConfig;
+use chromatic_cognition_core::dream::{BiasProfile, RetrievalMode, SimpleDreamPool};
 use chromatic_cognition_core::learner::feedback::{FeedbackRecord, UtilityAggregator};
-use chromatic_cognition_core::learner::training::{TrainingConfig, train_with_dreams};
+use chromatic_cognition_core::learner::training::{EpochMetrics, TrainingConfig, TrainingResult, train_with_dreams};
+use chromatic_cognition_core::learner::{ClassifierConfig, MLPClassifier};
+use chromatic_cognition_core::tensor::operations::mix;
 use chromatic_cognition_core::solver::native::ChromaticNativeSolver;
-use chromatic_cognition_core::spectral::{extract_spectral_features, WindowFunction};
-use std::fs;
-use serde_json;
+use chromatic_cognition_core::Solver;
 
 fn main() {
     println!("╔══════════════════════════════════════════════════════════════╗");
@@ -36,17 +36,26 @@ fn main() {
         seed: 42,
     };
 
-    let training_config = TrainingConfig {
-        epochs: 100,
+    let base_training = TrainingConfig {
+        num_epochs: 100,
         batch_size: 32,
         learning_rate: 0.01,
         lr_decay: 0.98,
-        convergence_threshold: 0.95,
+        use_dream_pool: false,
+        num_dreams_retrieve: 3,
+        retrieval_mode: RetrievalMode::Hard,
+        seed: 42,
     };
 
     let classifier_config = ClassifierConfig {
         hidden_size: 256,
-        learning_rate: 0.01,
+        ..Default::default()
+    };
+
+    let pool_config = PoolConfig {
+        max_size: 500,
+        coherence_threshold: 0.7,
+        retrieval_limit: 3,
     };
 
     println!("Configuration:");
@@ -69,12 +78,19 @@ fn main() {
     println!("│ Experiment 1: Baseline (No Dream Pool)                     │");
     println!("└──────────────────────────────────────────────────────────────┘");
 
-    let classifier = MLPClassifier::new(classifier_config.clone(), 42);
+    let baseline_config = TrainingConfig {
+        use_dream_pool: false,
+        num_dreams_retrieve: 0,
+        retrieval_mode: RetrievalMode::Hard,
+        ..base_training.clone()
+    };
+
+    let classifier = MLPClassifier::new(classifier_config.clone());
     let result_baseline = train_with_dreams(
         classifier,
         &train_samples,
         &val_samples,
-        training_config.clone(),
+        baseline_config.clone(),
         None::<&mut SimpleDreamPool>,
         None::<&mut ChromaticNativeSolver>,
     );
@@ -83,7 +99,7 @@ fn main() {
     println!("  Final Train Accuracy: {:.2}%", result_baseline.final_train_accuracy * 100.0);
     println!("  Final Val Accuracy: {:.2}%", result_baseline.final_val_accuracy * 100.0);
     println!("  Converged at Epoch: {:?}", result_baseline.converged_epoch);
-    println!("  Total Time: {}ms\n", result_baseline.training_time_ms);
+    println!("  Total Time: {}ms\n", result_baseline.total_elapsed_ms);
 
     // ========================================================================
     // Experiment 2: Phase 3A (Original Dream Pool)
@@ -92,32 +108,38 @@ fn main() {
     println!("│ Experiment 2: Phase 3A (Original Dream Pool)               │");
     println!("└──────────────────────────────────────────────────────────────┘");
 
-    let mut pool_3a = SimpleDreamPool::new(500, 0.7);
-    let mut solver = ChromaticNativeSolver::new();
+    let mut pool_3a = SimpleDreamPool::new(pool_config.clone());
+    let mut solver_3a = ChromaticNativeSolver::default();
 
-    // Populate pool
     println!("Populating Dream Pool...");
     for sample in &train_samples {
-        let result = solver.evaluate(&sample.tensor);
-        pool_3a.add(sample.tensor.clone(), result);
+        if let Ok(result) = solver_3a.evaluate(&sample.tensor, false) {
+            pool_3a.add_if_coherent(sample.tensor.clone(), result);
+        }
     }
     println!("  Pool size: {}\n", pool_3a.len());
 
-    let classifier = MLPClassifier::new(classifier_config.clone(), 42);
+    let phase3a_config = TrainingConfig {
+        use_dream_pool: true,
+        retrieval_mode: RetrievalMode::Hard,
+        ..base_training.clone()
+    };
+
+    let classifier = MLPClassifier::new(classifier_config.clone());
     let result_3a = train_with_dreams(
         classifier,
         &train_samples,
         &val_samples,
-        training_config.clone(),
+        phase3a_config.clone(),
         Some(&mut pool_3a),
-        Some(&mut solver),
+        Some(&mut solver_3a),
     );
 
     println!("\nPhase 3A Results:");
     println!("  Final Train Accuracy: {:.2}%", result_3a.final_train_accuracy * 100.0);
     println!("  Final Val Accuracy: {:.2}%", result_3a.final_val_accuracy * 100.0);
     println!("  Converged at Epoch: {:?}", result_3a.converged_epoch);
-    println!("  Total Time: {}ms\n", result_3a.training_time_ms);
+    println!("  Total Time: {}ms\n", result_3a.total_elapsed_ms);
 
     // ========================================================================
     // Experiment 3: Phase 3B (Refined Dream Pool)
@@ -127,31 +149,34 @@ fn main() {
     println!("│ Features: Class-aware + Diversity + Utility + Bias         │");
     println!("└──────────────────────────────────────────────────────────────┘");
 
-    let mut pool_3b = SimpleDreamPool::new(500, 0.7);
-    let mut solver = ChromaticNativeSolver::new();
+    let mut pool_3b = SimpleDreamPool::new(pool_config.clone());
+    let mut solver_3b = ChromaticNativeSolver::default();
     let mut aggregator = UtilityAggregator::new();
 
-    // Populate pool with class labels and spectral features
     println!("Populating Dream Pool with class labels...");
     for sample in &train_samples {
-        let result = solver.evaluate(&sample.tensor);
-        pool_3b.add_with_class(sample.tensor.clone(), result, sample.label);
+        if let Ok(result) = solver_3b.evaluate(&sample.tensor, false) {
+            pool_3b.add_with_class(sample.tensor.clone(), result, sample.label);
+        }
     }
     println!("  Pool size: {}\n", pool_3b.len());
 
-    // Train with enhanced retrieval
-    let classifier = MLPClassifier::new(classifier_config.clone(), 42);
+    let phase3b_config = TrainingConfig {
+        use_dream_pool: true,
+        retrieval_mode: RetrievalMode::Hybrid,
+        ..base_training.clone()
+    };
 
-    // For Phase 3B, we'll use class-aware retrieval in a custom training loop
-    // This is a simplified version - full integration would modify train_with_dreams
+    let classifier = MLPClassifier::new(classifier_config.clone());
+
     println!("Training with Phase 3B enhancements...");
     let result_3b = train_with_phase_3b(
         classifier,
         &train_samples,
         &val_samples,
-        training_config.clone(),
+        phase3b_config.clone(),
         &mut pool_3b,
-        &mut solver,
+        &mut solver_3b,
         &mut aggregator,
     );
 
@@ -159,7 +184,7 @@ fn main() {
     println!("  Final Train Accuracy: {:.2}%", result_3b.final_train_accuracy * 100.0);
     println!("  Final Val Accuracy: {:.2}%", result_3b.final_val_accuracy * 100.0);
     println!("  Converged at Epoch: {:?}", result_3b.converged_epoch);
-    println!("  Total Time: {}ms", result_3b.training_time_ms);
+    println!("  Total Time: {}ms", result_3b.total_elapsed_ms);
     println!("  Feedback Records: {}", aggregator.len());
     println!("  Mean Utility: {:.3}\n", aggregator.mean_utility());
 
@@ -175,8 +200,13 @@ fn main() {
     println!("\nClass Biases:");
     for class in [ColorClass::Red, ColorClass::Green, ColorClass::Blue] {
         if let Some(stats) = aggregator.class_stats(class) {
-            println!("  {:?}: mean_utility={:.3}, helpful={}, harmful={}",
-                     class, stats.mean_utility, stats.helpful_count, stats.harmful_count);
+            println!(
+                "  {:?}: mean_utility={:.3}, helpful={}, harmful={}",
+                class,
+                stats.mean_utility,
+                stats.helpful_count,
+                stats.harmful_count
+            );
         }
     }
 
@@ -185,8 +215,9 @@ fn main() {
         println!("  • {}", class_name);
     }
 
-    // Save bias profile
-    bias_profile.save_to_json("logs/phase_3b_bias_profile.json")
+    std::fs::create_dir_all("logs").expect("Failed to create logs directory");
+    bias_profile
+        .save_to_json("logs/phase_3b_bias_profile.json")
         .expect("Failed to save bias profile");
     println!("\n✓ Bias profile saved to logs/phase_3b_bias_profile.json");
 
@@ -205,26 +236,40 @@ fn main() {
         result_3a.final_val_accuracy,
         result_3b.final_val_accuracy,
     ];
-    let best_acc_idx = val_accs.iter().enumerate()
+    let best_acc_idx = val_accs
+        .iter()
+        .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-        .map(|(i, _)| i).unwrap();
+        .map(|(i, _)| i)
+        .unwrap();
 
-    println!("| Val Accuracy        | {:.2}%   | {:.2}%   | {:.2}%   | {}      |",
-             val_accs[0] * 100.0, val_accs[1] * 100.0, val_accs[2] * 100.0,
-             ["Baseline", "Phase 3A", "Phase 3B"][best_acc_idx]);
+    println!(
+        "| Val Accuracy        | {:.2}%   | {:.2}%   | {:.2}%   | {}      |",
+        val_accs[0] * 100.0,
+        val_accs[1] * 100.0,
+        val_accs[2] * 100.0,
+        ["Baseline", "Phase 3A", "Phase 3B"][best_acc_idx]
+    );
 
     let epochs = [
-        result_baseline.converged_epoch.unwrap_or(100),
-        result_3a.converged_epoch.unwrap_or(100),
-        result_3b.converged_epoch.unwrap_or(100),
+        result_baseline.converged_epoch.unwrap_or(base_training.num_epochs),
+        result_3a.converged_epoch.unwrap_or(base_training.num_epochs),
+        result_3b.converged_epoch.unwrap_or(base_training.num_epochs),
     ];
-    let best_epoch_idx = epochs.iter().enumerate()
+    let best_epoch_idx = epochs
+        .iter()
+        .enumerate()
         .min_by(|(_, a), (_, b)| a.cmp(b))
-        .map(|(i, _)| i).unwrap();
+        .map(|(i, _)| i)
+        .unwrap();
 
-    println!("| Convergence Epoch   | {}       | {}       | {}       | {}      |",
-             epochs[0], epochs[1], epochs[2],
-             ["Baseline", "Phase 3A", "Phase 3B"][best_epoch_idx]);
+    println!(
+        "| Convergence Epoch   | {}       | {}       | {}       | {}      |",
+        epochs[0],
+        epochs[1],
+        epochs[2],
+        ["Baseline", "Phase 3A", "Phase 3B"][best_epoch_idx]
+    );
 
     println!("\n┌──────────────────────────────────────────────────────────────┐");
     println!("│ Conclusion                                                   │");
@@ -251,99 +296,160 @@ fn train_with_phase_3b(
     pool: &mut SimpleDreamPool,
     solver: &mut ChromaticNativeSolver,
     aggregator: &mut UtilityAggregator,
-) -> chromatic_cognition_core::learner::training::TrainingResult {
+) -> TrainingResult {
     use chromatic_cognition_core::learner::ColorClassifier;
     use std::time::Instant;
 
+    let convergence_threshold = 0.95;
+    let mut current_lr = config.learning_rate;
     let start = Instant::now();
+
+    let mut epoch_metrics = Vec::new();
     let mut best_val_accuracy = 0.0;
     let mut converged_epoch = None;
+    let mut final_train_accuracy = 0.0;
 
-    for epoch in 0..config.epochs {
-        let mut epoch_loss = 0.0;
-        let mut batch_count = 0;
+    for epoch in 0..config.num_epochs {
+        let epoch_start = Instant::now();
+        let mut epoch_loss = 0.0f32;
+        let mut batch_count = 0usize;
+        let mut epoch_feedback = 0usize;
+        let mut dreams_used = 0usize;
 
-        // Training with class-aware retrieval
-        for batch_start in (0..train_data.len()).step_by(config.batch_size) {
+        for batch_start in (0..train_data.len()).step_by(config.batch_size.max(1)) {
             let batch_end = (batch_start + config.batch_size).min(train_data.len());
             let batch = &train_data[batch_start..batch_end];
 
-            let tensors: Vec<_> = batch.iter().map(|s| s.tensor.clone()).collect();
-            let labels: Vec<_> = batch.iter().map(|s| s.label).collect();
+            let mut batch_tensors = Vec::with_capacity(batch.len());
+            let mut batch_labels = Vec::with_capacity(batch.len());
 
-            let loss_before = classifier.compute_loss(&tensors, &labels).0;
+            for sample in batch {
+                let mut tensor = sample.tensor.clone();
+                let signature = tensor.mean_rgb();
+                let retrieved = pool.retrieve_similar_class(&signature, sample.label, config.num_dreams_retrieve);
 
-            // Phase 3B: Use class-aware + diverse retrieval
-            // For each sample, retrieve dreams from same class with diversity
-            // (Simplified: just use regular training for now as full integration
-            //  would require modifying the training loop significantly)
+                if let Some(entry) = retrieved.first() {
+                    tensor = mix(&tensor, &entry.tensor);
+                    dreams_used += 1;
+                }
 
-            let (loss, gradients) = classifier.compute_loss(&tensors, &labels);
-            classifier.update_weights(&gradients, config.learning_rate);
+                batch_tensors.push(tensor);
+                batch_labels.push(sample.label);
+            }
+
+            let loss_before = classifier.compute_loss(&batch_tensors, &batch_labels).0;
+            let (loss, gradients) = classifier.compute_loss(&batch_tensors, &batch_labels);
+            classifier.update_weights(&gradients, current_lr);
+            let loss_after = classifier.compute_loss(&batch_tensors, &batch_labels).0;
 
             epoch_loss += loss;
             batch_count += 1;
 
-            // Collect feedback (simplified)
             if epoch > 0 && batch_start % 256 == 0 {
-                let loss_after = classifier.compute_loss(&tensors, &labels).0;
                 if let Some(sample) = batch.first() {
                     let record = FeedbackRecord::new(
                         sample.tensor.mean_rgb(),
                         Some(sample.label),
                         loss_before,
                         loss_after,
-                        epoch,
+                        epoch + 1,
                     );
                     aggregator.add_record(record);
+                    epoch_feedback += 1;
                 }
             }
         }
 
-        // Validation
+        // Validation metrics
         let val_tensors: Vec<_> = val_data.iter().map(|s| s.tensor.clone()).collect();
         let val_labels: Vec<_> = val_data.iter().map(|s| s.label).collect();
-
-        let mut correct = 0;
-        for (tensor, label) in val_tensors.iter().zip(val_labels.iter()) {
-            if classifier.predict(tensor) == *label {
-                correct += 1;
-            }
-        }
-        let val_accuracy = correct as f32 / val_data.len() as f32;
+        let (val_loss, _) = classifier.compute_loss(&val_tensors, &val_labels);
+        let val_correct = val_tensors
+            .iter()
+            .zip(val_labels.iter())
+            .filter(|(tensor, &label)| classifier.predict(tensor) == label)
+            .count();
+        let val_accuracy = if val_data.is_empty() {
+            0.0
+        } else {
+            val_correct as f32 / val_data.len() as f32
+        };
 
         if val_accuracy > best_val_accuracy {
             best_val_accuracy = val_accuracy;
         }
 
-        // Check convergence
-        if val_accuracy >= config.convergence_threshold && converged_epoch.is_none() {
+        if val_accuracy >= convergence_threshold && converged_epoch.is_none() {
             converged_epoch = Some(epoch + 1);
         }
 
-        // Early stopping if converged
+        // Training accuracy
+        let train_correct = train_data
+            .iter()
+            .filter(|sample| classifier.predict(&sample.tensor) == sample.label)
+            .count();
+        let train_accuracy = if train_data.is_empty() {
+            0.0
+        } else {
+            train_correct as f32 / train_data.len() as f32
+        };
+
+        final_train_accuracy = train_accuracy;
+
+        let avg_train_loss = if batch_count > 0 {
+            epoch_loss / batch_count as f32
+        } else {
+            0.0
+        };
+
+        epoch_metrics.push(EpochMetrics {
+            epoch: epoch + 1,
+            train_loss: avg_train_loss,
+            train_accuracy,
+            val_loss,
+            val_accuracy,
+            learning_rate: current_lr,
+            elapsed_ms: epoch_start.elapsed().as_millis(),
+            dreams_used: dreams_used.max(epoch_feedback),
+        });
+
+        current_lr *= config.lr_decay;
+
         if converged_epoch.is_some() && epoch >= converged_epoch.unwrap() + 5 {
             break;
         }
-    }
 
-    let training_time_ms = start.elapsed().as_millis() as u64;
-
-    // Compute final accuracies
-    let train_tensors: Vec<_> = train_data.iter().map(|s| s.tensor.clone()).collect();
-    let train_labels: Vec<_> = train_data.iter().map(|s| s.label).collect();
-    let mut train_correct = 0;
-    for (tensor, label) in train_tensors.iter().zip(train_labels.iter()) {
-        if classifier.predict(tensor) == *label {
-            train_correct += 1;
+        // Refresh pool with recent tensors for continued retrieval
+        if epoch % 5 == 0 {
+            for sample in batch_subset(train_data, epoch) {
+                if let Ok(result) = solver.evaluate(&sample.tensor, false) {
+                    pool.add_with_class(sample.tensor.clone(), result, sample.label);
+                }
+            }
         }
     }
 
-    chromatic_cognition_core::learner::training::TrainingResult {
-        final_train_accuracy: train_correct as f32 / train_data.len() as f32,
+    TrainingResult {
+        config,
+        epoch_metrics,
+        final_train_accuracy,
         final_val_accuracy: best_val_accuracy,
+        total_elapsed_ms: start.elapsed().as_millis(),
         converged_epoch,
-        training_time_ms,
-        epoch_history: vec![],
     }
+}
+
+/// Helper: deterministic subset selection for periodic pool refresh.
+fn batch_subset<'a>(samples: &'a [ColorSample], epoch: usize) -> Vec<&'a ColorSample> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    let step = (samples.len() / 16).max(1);
+    let offset = epoch % step;
+    samples
+        .iter()
+        .skip(offset)
+        .step_by(step)
+        .collect()
 }

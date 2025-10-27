@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 - **anyhow 1.0** - Error handling for solver trait
 
+### Updated
+- Synchronized training examples with the new `TrainingConfig::retrieval_mode` field and current solver API for example builds.
+- Reworked the Phase 3B validation workflow to perform class-aware dream mixing, accumulate utility feedback, and persist bias profile artifacts.
+- Refreshed dream module documentation snippets and removed unused imports to keep doctests compiling without warnings.
+
 ### Analysis
 
 #### Dream Pool Specification Evaluation

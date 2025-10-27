@@ -139,7 +139,7 @@ pub fn rerank_hybrid(
 ///
 /// Iteratively selects entries, penalizing those too similar to already-selected ones.
 fn apply_mmr_penalty(
-    mut candidates: Vec<(EntryId, f32, f32)>,
+    candidates: Vec<(EntryId, f32, f32)>,
     lambda: f32,
     delta: f32,
     entries: &HashMap<EntryId, DreamEntry>,

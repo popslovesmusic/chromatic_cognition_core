@@ -3,10 +3,10 @@
 //! Implements gradient descent training with optional retrieval-based seeding
 //! from the Dream Pool to accelerate convergence.
 
-use crate::data::{ColorDataset, ColorSample};
-use crate::dream::{SimpleDreamPool, RetrievalMode};
-use crate::learner::classifier::{ColorClassifier, MLPClassifier, ClassifierConfig};
-use crate::solver::{Solver, SolverResult};
+use crate::data::ColorSample;
+use crate::dream::{RetrievalMode, SimpleDreamPool};
+use crate::learner::classifier::{ColorClassifier, MLPClassifier};
+use crate::solver::Solver;
 use crate::tensor::ChromaticTensor;
 use crate::tensor::operations::mix;
 use serde::{Serialize, Deserialize};
@@ -263,6 +263,7 @@ mod tests {
     use super::*;
     use crate::data::{ColorDataset, DatasetConfig};
     use crate::dream::simple_pool::PoolConfig;
+    use crate::learner::classifier::ClassifierConfig;
     use crate::ChromaticNativeSolver;
 
     #[test]

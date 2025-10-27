@@ -30,7 +30,7 @@ pub fn backward_mix(
     _input_b: &ChromaticTensor,
     output: &ChromaticTensor,
 ) -> (ChromaticTensor, ChromaticTensor) {
-    let (rows, cols, layers, _) = grad_output.shape();
+    let (_rows, _cols, _layers, _) = grad_output.shape();
 
     // For normalization, we need the max value that was used in forward pass
     // Approximation: assume gradient is scaled by the normalization factor

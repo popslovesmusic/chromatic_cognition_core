@@ -197,7 +197,7 @@ mod tests {
         let input = ChromaticTensor::from_seed(100, 8, 8, 2);
 
         // Forward
-        let output = layer.forward(&input);
+        let _output = layer.forward(&input);
 
         // Backward
         let grad_output = ChromaticTensor::from_seed(200, 8, 8, 2);

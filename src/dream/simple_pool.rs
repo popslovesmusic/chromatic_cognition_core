@@ -117,8 +117,9 @@ impl Default for PoolConfig {
 /// # Example
 ///
 /// ```rust
-/// use chromatic_cognition_core::dream::{SimpleDreamPool, PoolConfig};
-/// use chromatic_cognition_core::{ChromaticTensor, ChromaticNativeSolver, Solver};
+/// use chromatic_cognition_core::dream::simple_pool::PoolConfig;
+/// use chromatic_cognition_core::dream::SimpleDreamPool;
+/// use chromatic_cognition_core::{ChromaticNativeSolver, ChromaticTensor, Solver};
 ///
 /// let config = PoolConfig::default();
 /// let mut pool = SimpleDreamPool::new(config);
@@ -413,11 +414,11 @@ impl SimpleDreamPool {
     /// Vector of diverse dreams selected by MMR
     ///
     /// # Example
-    /// ```
+    /// ```rust
+    /// # use chromatic_cognition_core::dream::simple_pool::PoolConfig;
     /// # use chromatic_cognition_core::dream::SimpleDreamPool;
-    /// # use chromatic_cognition_core::tensor::ChromaticTensor;
-    /// # use chromatic_cognition_core::solver::SolverResult;
-    /// let mut pool = SimpleDreamPool::new(100, 0.7);
+    /// let config = PoolConfig::default();
+    /// let mut pool = SimpleDreamPool::new(config);
     /// // ... add dreams ...
     /// let query = [1.0, 0.0, 0.0]; // Red query
     /// let diverse = pool.retrieve_diverse(&query, 5, 0.7, 0.1);

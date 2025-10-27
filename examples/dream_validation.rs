@@ -15,7 +15,7 @@
 use chromatic_cognition_core::data::DatasetConfig;
 use chromatic_cognition_core::dream::simple_pool::PoolConfig;
 use chromatic_cognition_core::dream::{ExperimentConfig, ExperimentHarness, SeedingStrategy};
-use chromatic_cognition_core::{ChromaticNativeSolver, Solver};
+use chromatic_cognition_core::ChromaticNativeSolver;
 use std::fs::File;
 use std::io::Write;
 

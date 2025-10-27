@@ -58,7 +58,7 @@ impl QuerySignature {
 /// Embedding mapper that fuses multiple features into fixed-dimension vectors.
 ///
 /// **Architecture:** Linear projection with layer normalization
-/// ```
+/// ```text
 /// features = [rgb(3), spectral(6), class_onehot(10), utility(1)]
 /// z = LayerNorm(features · W + b)
 /// ```

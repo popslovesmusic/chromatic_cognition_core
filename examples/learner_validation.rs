@@ -15,9 +15,9 @@
 
 use chromatic_cognition_core::data::{ColorDataset, DatasetConfig};
 use chromatic_cognition_core::dream::simple_pool::PoolConfig;
-use chromatic_cognition_core::dream::SimpleDreamPool;
+use chromatic_cognition_core::dream::{RetrievalMode, SimpleDreamPool};
 use chromatic_cognition_core::{
-    ChromaticNativeSolver, ClassifierConfig, MLPClassifier, Solver, TrainingConfig,
+    ChromaticNativeSolver, ClassifierConfig, MLPClassifier, TrainingConfig,
     train_baseline, train_with_dreams,
 };
 use std::fs::File;
@@ -77,6 +77,7 @@ fn main() {
         lr_decay: 0.98,
         use_dream_pool: false,
         num_dreams_retrieve: 0,
+        retrieval_mode: RetrievalMode::Hard,
         seed: 42,
     };
 
@@ -113,6 +114,7 @@ fn main() {
         lr_decay: 0.98,
         use_dream_pool: true,
         num_dreams_retrieve: 3,
+        retrieval_mode: RetrievalMode::Hard,
         seed: 42,
     };
 
