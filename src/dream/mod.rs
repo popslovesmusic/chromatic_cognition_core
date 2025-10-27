@@ -10,6 +10,7 @@ pub mod diversity;
 pub mod embedding;
 pub mod experiment;
 pub mod simple_pool;
+pub mod soft_index;
 
 pub use analysis::{compare_experiments, generate_report, ExperimentComparison, Statistics};
 pub use bias::{BiasProfile, ClassBias, SpectralBias, ChromaBias, ProfileMetadata};
@@ -17,3 +18,4 @@ pub use diversity::{chroma_dispersion, mmr_score, retrieve_diverse_mmr, Diversit
 pub use embedding::{EmbeddingMapper, QuerySignature};
 pub use experiment::{ExperimentConfig, ExperimentHarness, ExperimentResult, SeedingStrategy};
 pub use simple_pool::SimpleDreamPool;
+pub use soft_index::{SoftIndex, Similarity, EntryId};
