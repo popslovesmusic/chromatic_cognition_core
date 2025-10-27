@@ -1,0 +1,44 @@
+You are the coding agent assigned to initialize and develop the Chromatic Cognition Core project.
+
+## Context
+This project models cognitive processes as a chromatic tensor field — a 4-D grid of RGB values evolving through additive and subtractive operations.  
+The system must be deterministic, CPU-only for now, and portable to GPU later through Candle.
+
+## Documents
+1. Follow all behavioral and communication rules in `agents.md`.
+2. Implement exactly what is defined in `spec.md` — no extra frameworks, no hidden features.
+
+## Objective
+Create the initial Rust crate `chromatic_cognition_core` that:
+- Compiles with `cargo build --release` on CPU-only systems.
+- Implements the primitives and tensor structures in `spec.md`.
+- Produces minimal example outputs (JSON logs + PNG frame).
+
+## Step-by-Step Startup
+1. Create folder structure per `spec.md`.
+2. Initialize `Cargo.toml` with required crates: `ndarray`, `rayon`, `serde`, `serde_json`, `plotters`.
+3. Implement the ChromaticTensor struct and the four primitive operations:
+   - `mix`
+   - `filter`
+   - `complement`
+   - `saturate`
+4. Add unit tests verifying each operation’s numeric behavior.
+5. Add an example binary `examples/demo.rs` that:
+   - generates a random tensor,
+   - applies operations sequentially,
+   - saves `out/frame_0001.png`,
+   - appends one JSON line to `logs/run.jsonl`.
+
+## Reporting
+After implementation, produce:
+- A one-page `report.md` summarizing build details and performance.
+- A short `CHANGELOG` entry titled “Chromatic Cognition Core – Initial Commit.”
+
+## Constraints
+- Use only CPU execution.
+- No dependencies beyond those specified.
+- Log every function that mutates tensors.
+- Keep code readable, deterministic, and documented.
+
+Begin work only after confirming both `agents.md` and `spec.md` are loaded into memory.
+Output proposed diffs or file lists before committing any code.
