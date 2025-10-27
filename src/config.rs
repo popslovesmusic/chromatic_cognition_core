@@ -1,15 +1,37 @@
+//! Engine configuration management via TOML files.
+//!
+//! This module provides configuration parsing from TOML format with sensible defaults.
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
 
+/// Engine configuration loaded from TOML file.
+///
+/// # Examples
+///
+/// ```
+/// use chromatic_cognition_core::EngineConfig;
+///
+/// // Load from file
+/// let config = EngineConfig::load_from_file("config/engine.toml")
+///     .unwrap_or_else(|_| EngineConfig::default());
+///
+/// println!("Tensor dimensions: {}x{}x{}", config.rows, config.cols, config.layers);
+/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct EngineConfig {
+    /// Number of rows in the tensor grid
     pub rows: usize,
+    /// Number of columns in the tensor grid
     pub cols: usize,
+    /// Number of depth layers in the tensor
     pub layers: usize,
+    /// Random seed for deterministic initialization
     pub seed: u64,
+    /// Target device ("cpu" or future "cuda"/"metal")
     pub device: String,
 }
 

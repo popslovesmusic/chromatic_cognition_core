@@ -5,13 +5,50 @@ use ndarray::{Array3, Array4, Axis};
 use rayon::prelude::*;
 use serde::Serialize;
 
+/// A 4-dimensional chromatic tensor representing an RGB color field with certainty weights.
+///
+/// The tensor structure is `[rows, cols, layers, 3]` where each cell contains:
+/// - RGB color values (3 channels) in range [0.0, 1.0]
+/// - A certainty/confidence weight ρ in range [0.0, 1.0]
+///
+/// # Examples
+///
+/// ```
+/// use chromatic_cognition_core::ChromaticTensor;
+///
+/// // Create a deterministic random tensor
+/// let tensor = ChromaticTensor::from_seed(42, 64, 64, 8);
+///
+/// // Get statistics
+/// let stats = tensor.statistics();
+/// println!("Mean RGB: {:?}", stats.mean_rgb);
+/// println!("Variance: {}", stats.variance);
+/// ```
 #[derive(Clone, Debug, Serialize)]
 pub struct ChromaticTensor {
+    /// RGB color values as a 4D array: [rows, cols, layers, 3]
     pub colors: Array4<f32>,
+    /// Certainty weights as a 3D array: [rows, cols, layers]
     pub certainty: Array3<f32>,
 }
 
 impl ChromaticTensor {
+    /// Creates a new chromatic tensor initialized with zeros.
+    ///
+    /// # Arguments
+    ///
+    /// * `rows` - Number of rows in the tensor
+    /// * `cols` - Number of columns in the tensor
+    /// * `layers` - Number of depth layers in the tensor
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chromatic_cognition_core::ChromaticTensor;
+    ///
+    /// let tensor = ChromaticTensor::new(64, 64, 8);
+    /// assert_eq!(tensor.shape(), (64, 64, 8, 3));
+    /// ```
     pub fn new(rows: usize, cols: usize, layers: usize) -> Self {
         Self {
             colors: Array4::zeros((rows, cols, layers, 3)),
@@ -19,6 +56,16 @@ impl ChromaticTensor {
         }
     }
 
+    /// Creates a chromatic tensor from existing color and certainty arrays.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimensions of `colors` and `certainty` don't match.
+    ///
+    /// # Arguments
+    ///
+    /// * `colors` - 4D array of RGB values [rows, cols, layers, 3]
+    /// * `certainty` - 3D array of certainty weights [rows, cols, layers]
     pub fn from_arrays(colors: Array4<f32>, certainty: Array3<f32>) -> Self {
         assert_eq!(colors.dim().0, certainty.dim().0);
         assert_eq!(colors.dim().1, certainty.dim().1);
@@ -26,6 +73,30 @@ impl ChromaticTensor {
         Self { colors, certainty }
     }
 
+    /// Creates a deterministic random chromatic tensor from a seed value.
+    ///
+    /// Uses a linear congruential generator (LCG) for deterministic randomness,
+    /// ensuring the same seed always produces the same tensor.
+    ///
+    /// # Arguments
+    ///
+    /// * `seed` - Random seed (use 0 for default seed of 1)
+    /// * `rows` - Number of rows in the tensor
+    /// * `cols` - Number of columns in the tensor
+    /// * `layers` - Number of depth layers in the tensor
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chromatic_cognition_core::ChromaticTensor;
+    ///
+    /// // Create two tensors with the same seed
+    /// let tensor1 = ChromaticTensor::from_seed(42, 32, 32, 4);
+    /// let tensor2 = ChromaticTensor::from_seed(42, 32, 32, 4);
+    ///
+    /// // They will be identical
+    /// assert_eq!(tensor1.colors, tensor2.colors);
+    /// ```
     pub fn from_seed(seed: u64, rows: usize, cols: usize, layers: usize) -> Self {
         let mut tensor = Self::new(rows, cols, layers);
         let state = if seed == 0 { 1 } else { seed };
@@ -101,29 +172,36 @@ impl ChromaticTensor {
 
     pub fn complement(&self) -> Self {
         let mut colors = self.colors.clone();
-        colors
-            .axis_iter_mut(Axis(3))
-            .par_bridge()
-            .for_each(|mut pixel| {
-                let g = pixel[1];
-                let b = pixel[2];
-                pixel[1] = 1.0 - g;
-                pixel[2] = 1.0 - b;
-            });
+        let (rows, cols, layers, _) = colors.dim();
+        for row in 0..rows {
+            for col in 0..cols {
+                for layer in 0..layers {
+                    let g = colors[[row, col, layer, 1]];
+                    let b = colors[[row, col, layer, 2]];
+                    colors[[row, col, layer, 1]] = 1.0 - g;
+                    colors[[row, col, layer, 2]] = 1.0 - b;
+                }
+            }
+        }
         Self::from_arrays(colors, self.certainty.clone())
     }
 
     pub fn saturate(&self, alpha: f32) -> Self {
         let mut colors = self.colors.clone();
-        colors
-            .axis_iter_mut(Axis(3))
-            .par_bridge()
-            .for_each(|mut pixel| {
-                let mean = (pixel[0] + pixel[1] + pixel[2]) / 3.0;
-                for value in pixel.iter_mut() {
-                    *value = mean + (*value - mean) * alpha;
+        let (rows, cols, layers, _) = colors.dim();
+        for row in 0..rows {
+            for col in 0..cols {
+                for layer in 0..layers {
+                    let r = colors[[row, col, layer, 0]];
+                    let g = colors[[row, col, layer, 1]];
+                    let b = colors[[row, col, layer, 2]];
+                    let mean = (r + g + b) / 3.0;
+                    colors[[row, col, layer, 0]] = mean + (r - mean) * alpha;
+                    colors[[row, col, layer, 1]] = mean + (g - mean) * alpha;
+                    colors[[row, col, layer, 2]] = mean + (b - mean) * alpha;
                 }
-            });
+            }
+        }
         Self::from_arrays(colors, self.certainty.clone())
     }
 
@@ -133,43 +211,45 @@ impl ChromaticTensor {
 
         let mut mean_rgb = [0.0f32; 3];
         for channel in 0..3 {
-            mean_rgb[channel] = self
-                .colors
-                .index_axis(Axis(3), channel)
-                .as_slice()
-                .expect("contiguous")
-                .par_iter()
-                .cloned()
-                .sum::<f32>()
-                / cells;
+            let channel_view = self.colors.index_axis(Axis(3), channel);
+            let sum = if let Some(slice) = channel_view.as_slice() {
+                slice.par_iter().cloned().sum::<f32>()
+            } else {
+                channel_view.iter().cloned().sum::<f32>()
+            };
+            mean_rgb[channel] = sum / cells;
         }
 
         let mut variance_sum = 0.0f32;
         for channel in 0..3 {
             let mean = mean_rgb[channel];
-            let channel_variance = self
-                .colors
-                .index_axis(Axis(3), channel)
-                .as_slice()
-                .expect("contiguous")
-                .par_iter()
-                .map(|value| {
-                    let diff = *value - mean;
-                    diff * diff
-                })
-                .sum::<f32>();
-            variance_sum += channel_variance;
+            let channel_view = self.colors.index_axis(Axis(3), channel);
+            let variance = if let Some(slice) = channel_view.as_slice() {
+                slice
+                    .par_iter()
+                    .map(|value| {
+                        let diff = *value - mean;
+                        diff * diff
+                    })
+                    .sum::<f32>()
+            } else {
+                channel_view
+                    .iter()
+                    .map(|value| {
+                        let diff = *value - mean;
+                        diff * diff
+                    })
+                    .sum::<f32>()
+            };
+            variance_sum += variance;
         }
 
         let variance = variance_sum / (cells * 3.0);
-        let mean_certainty = self
-            .certainty
-            .as_slice()
-            .expect("contiguous")
-            .par_iter()
-            .cloned()
-            .sum::<f32>()
-            / cells;
+        let mean_certainty = if let Some(slice) = self.certainty.as_slice() {
+            slice.par_iter().cloned().sum::<f32>() / cells
+        } else {
+            self.certainty.iter().cloned().sum::<f32>() / cells
+        };
 
         TensorStatistics {
             mean_rgb,

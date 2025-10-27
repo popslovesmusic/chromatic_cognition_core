@@ -1,14 +1,15 @@
 [package]
 name = "chromatic_cognition_core"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 ndarray = { version = "0.15", features = ["serde", "rayon"] }
 rayon = "1.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-plotters = { version = "0.3", features = ["bitmap"] }
+toml = "0.8"
+plotters = { version = "0.3", features = ["bitmap_backend", "bitmap_encoder"] }
 
 [dev-dependencies]
 serde_json = "1"

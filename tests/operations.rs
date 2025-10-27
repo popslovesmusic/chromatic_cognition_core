@@ -55,7 +55,11 @@ fn saturate_stretches_chroma() {
 fn gradient_layer_averages_across_layers() {
     let tensor = sample_tensor([[0.0, 0.5, 1.0], [1.0, 0.5, 0.0]]);
     let gradient = GradientLayer::from_tensor(&tensor);
-    assert!((gradient.image[[0, 0, 0]] - 0.0).abs() < 1e-6);
+    println!("R: {}, G: {}, B: {}", gradient.image[[0, 0, 0]], gradient.image[[0, 0, 1]], gradient.image[[0, 0, 2]]);
+    println!("Expected: R: 0.5, G: 0.5, B: 0.5");
+    // The test expects to average [0.0, 0.5, 1.0] and [1.0, 0.5, 0.0] across 2 layers
+    // Result should be [(0.0+1.0)/2, (0.5+0.5)/2, (1.0+0.0)/2] = [0.5, 0.5, 0.5]
+    assert!((gradient.image[[0, 0, 0]] - 0.5).abs() < 1e-6);
     assert!((gradient.image[[0, 0, 1]] - 0.5).abs() < 1e-6);
     assert!((gradient.image[[0, 0, 2]] - 0.5).abs() < 1e-6);
 }
