@@ -34,6 +34,7 @@
 pub mod config;
 pub mod data;
 pub mod dream;
+pub mod learner;
 pub mod logging;
 pub mod neural;
 pub mod solver;
@@ -42,6 +43,8 @@ pub mod training;
 
 pub use config::EngineConfig;
 pub use dream::{SimpleDreamPool};
+pub use learner::{ColorClassifier, MLPClassifier, ClassifierConfig};
+pub use learner::training::{TrainingConfig, TrainingResult, train_with_dreams, train_baseline};
 pub use solver::{Solver, SolverResult};
 pub use solver::native::ChromaticNativeSolver;
 pub use tensor::ChromaticTensor;

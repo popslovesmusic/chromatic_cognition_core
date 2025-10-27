@@ -1,0 +1,84 @@
+╔══════════════════════════════════════════════════════════════╗
+║  Learner Validation Experiment - Minimal Viable Learner     ║
+║  Goal: Prove training works & Dream Pool helps convergence  ║
+╚══════════════════════════════════════════════════════════════╝
+
+Configuration:
+  Dataset: 1000 samples (100 per class)
+  Tensor Size: 16×16×4
+  Model: MLP with 256 hidden units
+  Pool: 500 max dreams, coherence ≥ 0.7
+
+Generating dataset...
+  Train: 800 samples
+  Val: 200 samples
+
+┌──────────────────────────────────────────────────────────────┐
+│ Experiment 1: Baseline Training (No Dream Pool)             │
+└──────────────────────────────────────────────────────────────┘
+Training baseline model... Done!
+
+Baseline Results:
+  Final Train Accuracy: 95.50%
+  Final Val Accuracy: 90.00%
+  Converged at Epoch: Some(15)
+  Total Time: 109277ms
+
+┌──────────────────────────────────────────────────────────────┐
+│ Experiment 2: Training with Dream Pool Retrieval            │
+└──────────────────────────────────────────────────────────────┘
+Training with Dream Pool... Done!
+
+Dream Pool Results:
+  Final Train Accuracy: 90.12%
+  Final Val Accuracy: 89.00%
+  Converged at Epoch: Some(24)
+  Total Time: 240480ms
+  Pool Size: 500
+  Pool Mean Coherence: 0.8496
+
+┌──────────────────────────────────────────────────────────────┐
+│ Comparison                                                   │
+└──────────────────────────────────────────────────────────────┘
+Final Validation Accuracy:
+  Baseline: 90.00%
+  Dream Pool: 89.00%
+  Improvement: -0.0100 (-1.11%)
+
+Convergence (95% accuracy):
+  Baseline: epoch 15
+  Dream Pool: epoch 24
+  Dream Pool converged 9 epochs SLOWER ⚠️
+
+┌──────────────────────────────────────────────────────────────┐
+│ Saving Results                                               │
+└──────────────────────────────────────────────────────────────┘
+✓ Baseline results: logs/learner_baseline.json
+✓ Dream Pool results: logs/learner_dream_pool.json
+✓ Metrics CSV: logs/learner_comparison.csv
+
+┌──────────────────────────────────────────────────────────────┐
+│ Validation Assessment                                        │
+└──────────────────────────────────────────────────────────────┘
+
+✓ VALIDATION CHECKLIST:
+
+  [✓] Training achieves >90% accuracy
+      Baseline: 90.00%
+  [✗] Dream Pool improves final accuracy
+      Improvement: -1.11%
+  [✗] Dream Pool accelerates convergence
+      Baseline: 15 epochs, Dream Pool: 24 epochs
+
+╔══════════════════════════════════════════════════════════════╗
+║  ⚠️  PARTIAL: Training works, but Dream Pool shows no benefit║
+╚══════════════════════════════════════════════════════════════╝
+
+Training algorithm is functional, but retrieval hypothesis not validated.
+
+Possible causes:
+  - Coherence threshold too high (pool too sparse)
+  - Dataset too simple (training converges quickly anyway)
+  - Retrieval strategy needs tuning
+
+Recommendation: Investigate Dream Pool parameters or try harder task.

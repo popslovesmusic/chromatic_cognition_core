@@ -8,7 +8,11 @@
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(awk:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(timeout 600 ./target/release/examples/learner_validation.exe:*)",
+      "Bash(tee:*)"
     ],
     "deny": [],
     "ask": []
