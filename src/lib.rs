@@ -35,10 +35,13 @@ pub mod config;
 pub mod data;
 pub mod logging;
 pub mod neural;
+pub mod solver;
 pub mod tensor;
 pub mod training;
 
 pub use config::EngineConfig;
+pub use solver::{Solver, SolverResult};
+pub use solver::native::ChromaticNativeSolver;
 pub use tensor::ChromaticTensor;
 pub use tensor::gradient::GradientLayer;
 pub use tensor::operations::{complement, filter, mix, saturate};

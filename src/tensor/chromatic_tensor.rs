@@ -257,6 +257,55 @@ impl ChromaticTensor {
             mean_certainty,
         }
     }
+
+    /// Get RGB values at a specific cell
+    ///
+    /// # Arguments
+    /// * `row` - Row index
+    /// * `col` - Column index
+    /// * `layer` - Layer index
+    ///
+    /// # Returns
+    /// Array of [r, g, b] values
+    pub fn get_rgb(&self, row: usize, col: usize, layer: usize) -> [f32; 3] {
+        [
+            self.colors[[row, col, layer, 0]],
+            self.colors[[row, col, layer, 1]],
+            self.colors[[row, col, layer, 2]],
+        ]
+    }
+
+    /// Get tensor dimensions (rows, cols, layers)
+    pub fn dims(&self) -> (usize, usize, usize) {
+        let (rows, cols, layers, _) = self.colors.dim();
+        (rows, cols, layers)
+    }
+
+    /// Get mean RGB values across all cells
+    pub fn mean_rgb(&self) -> [f32; 3] {
+        self.statistics().mean_rgb
+    }
+
+    /// Get total number of cells in tensor
+    pub fn total_cells(&self) -> usize {
+        let (rows, cols, layers) = self.dims();
+        rows * cols * layers
+    }
+
+    /// Get number of rows
+    pub fn rows(&self) -> usize {
+        self.colors.dim().0
+    }
+
+    /// Get number of columns
+    pub fn cols(&self) -> usize {
+        self.colors.dim().1
+    }
+
+    /// Get number of layers
+    pub fn layers(&self) -> usize {
+        self.colors.dim().2
+    }
 }
 
 impl Display for ChromaticTensor {

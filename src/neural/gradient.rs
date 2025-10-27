@@ -211,7 +211,7 @@ pub fn backward_saturate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::Array4;
+    use ndarray::{Array3, Array4};
 
     fn sample_tensor(values: [[f32; 3]; 2]) -> ChromaticTensor {
         let colors = Array4::from_shape_vec((1, 1, 2, 3), values.into_iter().flatten().collect())

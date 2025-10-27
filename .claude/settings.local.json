@@ -14,7 +14,8 @@
       "Bash(cat:*)",
       "Bash(cargo check:*)",
       "Bash(cargo build:*)",
-      "Read(//d/isoG/New-folder/sase_amp_fixed/**)"
+      "Read(//d/isoG/New-folder/sase_amp_fixed/**)",
+      "Bash(cargo add:*)"
     ],
     "deny": [],
     "ask": []

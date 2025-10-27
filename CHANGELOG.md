@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Native Rust Solver
+
+#### Solver Module
+- **`Solver` trait** - Interface for chromatic field evaluators
+- **`SolverResult`** - Standardized result structure (energy, coherence, violation, gradients)
+- **`ChromaticNativeSolver`** - Color-theory-informed metric implementation
+
+#### Color-Space Metrics
+- **Energy**: Total variation (spatial smoothness) + saturation penalty
+- **Coherence**: Color harmony based on complementary balance and hue consistency
+- **Violation**: Gamut clipping, extreme saturation, local discontinuities
+- **Gradients**: Analytical derivatives for all metrics (fast, accurate)
+
+#### Color Space Utilities
+- `rgb_distance()` - Euclidean distance between RGB colors
+- `rgb_saturation()` - Saturation computation (max-min)/max
+- `rgb_saturation_gradient()` - Gradient of saturation w.r.t. RGB
+- `rgb_to_hsv()` - RGB to hue-saturation-value conversion
+- `angle_difference()` - Shortest angular distance between hue angles
+
+#### ChromaticTensor Enhancements
+- `get_rgb()` - Access RGB values at specific cell
+- `dims()` - Get tensor dimensions (rows, cols, layers)
+- `mean_rgb()` - Compute mean RGB across all cells
+- `total_cells()` - Get total number of cells
+- `rows()`, `cols()`, `layers()` - Dimension accessors
+
+#### Examples
+- **solver_demo.rs** - Comprehensive solver demonstration
+  - Smooth random fields
+  - High contrast patterns (checkerboard)
+  - Pure RGB colors (saturation analysis)
+  - Out-of-gamut violation detection
+  - Gradient computation example
+
+#### Testing
+- Unit tests for color space utilities (rgb_distance, rgb_saturation, rgb_to_hsv, angle_difference)
+- All tests passing (4/4 solver tests)
+
+### Dependencies
+- **anyhow 1.0** - Error handling for solver trait
+
 ### Analysis
 
 #### DASE Integration Assessment
