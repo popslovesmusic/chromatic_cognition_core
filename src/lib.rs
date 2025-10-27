@@ -45,6 +45,7 @@ pub mod training;
 pub use config::EngineConfig;
 pub use dream::{SimpleDreamPool};
 pub use learner::{ColorClassifier, MLPClassifier, ClassifierConfig};
+pub use learner::feedback::{FeedbackRecord, UtilityAggregator, ClassUtilityStats};
 pub use learner::training::{TrainingConfig, TrainingResult, train_with_dreams, train_baseline};
 pub use solver::{Solver, SolverResult};
 pub use solver::native::ChromaticNativeSolver;

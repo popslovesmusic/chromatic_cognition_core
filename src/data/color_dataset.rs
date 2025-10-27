@@ -10,7 +10,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 /// 10 standard color classes for classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(usize)]
 pub enum ColorClass {
     Red = 0,

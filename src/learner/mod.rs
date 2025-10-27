@@ -12,7 +12,9 @@
 //! Future expansion path to full LEARNER MANIFEST v1.0 features.
 
 pub mod classifier;
+pub mod feedback;
 pub mod training;
 
 pub use classifier::{ColorClassifier, MLPClassifier, ClassifierConfig};
+pub use feedback::{FeedbackRecord, UtilityAggregator, ClassUtilityStats};
 pub use training::{TrainingConfig, TrainingResult, train_with_dreams};
