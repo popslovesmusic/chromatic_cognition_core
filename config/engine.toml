@@ -1,0 +1,6 @@
+[engine]
+rows = 64
+cols = 64
+layers = 8
+seed = 42
+device = "cpu"
