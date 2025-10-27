@@ -10,6 +10,7 @@ pub mod diversity;
 pub mod embedding;
 pub mod experiment;
 pub mod hybrid_scoring;
+pub mod retrieval_mode;
 pub mod simple_pool;
 pub mod soft_index;
 
@@ -19,5 +20,6 @@ pub use diversity::{chroma_dispersion, mmr_score, retrieve_diverse_mmr, Diversit
 pub use embedding::{EmbeddingMapper, QuerySignature};
 pub use experiment::{ExperimentConfig, ExperimentHarness, ExperimentResult, SeedingStrategy};
 pub use hybrid_scoring::{rerank_hybrid, RetrievalWeights};
+pub use retrieval_mode::RetrievalMode;
 pub use simple_pool::SimpleDreamPool;
 pub use soft_index::{SoftIndex, Similarity, EntryId};

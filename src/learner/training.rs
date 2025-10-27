@@ -4,7 +4,7 @@
 //! from the Dream Pool to accelerate convergence.
 
 use crate::data::{ColorDataset, ColorSample};
-use crate::dream::SimpleDreamPool;
+use crate::dream::{SimpleDreamPool, RetrievalMode};
 use crate::learner::classifier::{ColorClassifier, MLPClassifier, ClassifierConfig};
 use crate::solver::{Solver, SolverResult};
 use crate::tensor::ChromaticTensor;
@@ -27,6 +27,8 @@ pub struct TrainingConfig {
     pub use_dream_pool: bool,
     /// Number of dreams to retrieve per sample
     pub num_dreams_retrieve: usize,
+    /// Retrieval mode: Hard (Phase 3B), Soft (Phase 4), or Hybrid
+    pub retrieval_mode: RetrievalMode,
     /// Seed for reproducibility
     pub seed: u64,
 }
@@ -40,6 +42,7 @@ impl Default for TrainingConfig {
             lr_decay: 0.95,
             use_dream_pool: false,
             num_dreams_retrieve: 3,
+            retrieval_mode: RetrievalMode::default(),
             seed: 42,
         }
     }
