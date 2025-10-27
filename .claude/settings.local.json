@@ -9,7 +9,11 @@
       "Bash(git push:*)",
       "Bash(git fetch:*)",
       "Bash(git pull:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(cargo clean:*)",
+      "Bash(cat:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)"
     ],
     "deny": [],
     "ask": []

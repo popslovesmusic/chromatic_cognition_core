@@ -32,7 +32,9 @@
 //! - [`training`] - Loss functions and training metrics
 
 pub mod config;
+pub mod data;
 pub mod logging;
+pub mod neural;
 pub mod tensor;
 pub mod training;
 

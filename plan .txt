@@ -1,0 +1,398 @@
+Chromatic ↔ DASE Integration Spec (v0.1)
+
+0) scope & goals
+
+goal: use DASE as the “solver/validator” for a chromatic tensor field (your reasoning state).
+
+direction: chromatic core proposes a state → DASE evaluates coherence/constraints → trainer updates chromatic state.
+
+constraints: CPU-first; deterministic; reproducible; JSON ledger; minimal external deps.
+
+
+
+---
+
+1) core definitions
+
+1.1 coordinate system
+
+chromatic cell value: RGB vector in [0,1]^3 (f32); optional perceptual space later.
+
+certainty (optional now, v0.2): scalar ρ∈[0,1] per cell.
+
+tensor shape: (rows, cols, layers, 3); alias Shape = (usize, usize, usize) for (R,C,L).
+
+
+1.2 invariants
+
+all tensor values are clamped to [0,1] after each mutating op.
+
+update steps are pure functions + explicit state writes; no hidden global mutation.
+
+all randomness seeded; all seeds logged.
+
+
+
+---
+
+2) rust data types
+
+// src/tensor/chromatic_tensor.rs
+#[derive(Clone, Debug)]
+pub struct ChromaticTensor {
+    pub rows: usize,
+    pub cols: usize,
+    pub layers: usize,
+    // layout: (rows, cols, layers, channels=3)
+    pub data: ndarray::Array4<f32>, // shape [R, C, L, 3]
+    pub seed: u64,
+}
+
+helper aliases:
+
+pub type RGB = [f32; 3];
+pub type Shape = (usize, usize, usize);
+
+DASE I/O buffers (row-major):
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DaseField<'a> {
+    pub rows: usize,
+    pub cols: usize,
+    pub layers: usize,
+    // contiguous buffer: R*C*L*3 entries; channel order RGB
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<&'a [f32]>, // for FFI zero-copy views
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DaseResult {
+    // scalar metrics (global)
+    pub energy: f64,            // total field energy
+    pub coherence: f64,         // [0,1]
+    pub violation: f64,         // normalized constraint violation [0,1]
+    // per-cell maps (optional, may be empty if not requested)
+    pub grad: Option<Vec<f32>>, // same layout, gradient wrt RGB
+    pub mask: Option<Vec<f32>>, // per-cell penalty / attention (R*C*L)
+    pub meta: serde_json::Value // freeform diagnostic (timings, iters, etc.)
+}
+
+
+---
+
+3) chromatic ops (CPU, deterministic)
+
+// src/tensor/operations.rs
+pub fn mix(a: &ChromaticTensor, b: &ChromaticTensor) -> ChromaticTensor;     // additive coherence
+pub fn filter(a: &ChromaticTensor, b: &ChromaticTensor) -> ChromaticTensor;  // subtractive distinction
+pub fn complement(a: &ChromaticTensor) -> ChromaticTensor;                    // hue inversion
+pub fn saturate(a: &ChromaticTensor, alpha: f32) -> ChromaticTensor;          // chroma scale
+
+contracts
+
+a.data.dim() == b.data.dim() for binary ops.
+
+all outputs clamped to [0,1].
+
+no allocation storms: reuse buffers when possible (pooling later).
+
+
+
+---
+
+4) solver interface (DASE)
+
+4.1 trait
+
+// src/solver.rs
+pub trait Solver {
+    /// Evaluate a chromatic field; optionally compute gradients.
+    fn evaluate(&mut self, field: &ChromaticTensor, with_grad: bool) -> anyhow::Result<DaseResult>;
+
+    /// Stateless, pure scoring (if available). Implementors may copy the field internally.
+    fn score(&self, field: &ChromaticTensor) -> anyhow::Result<(f64 /*energy*/, f64 /*coherence*/, f64 /*violation*/)>;
+
+    /// Reset internal state (seeds, caches) to a known baseline.
+    fn reset(&mut self, seed: u64) -> anyhow::Result<()>;
+}
+
+4.2 DASE binding (two options)
+
+A) FFI (preferred for speed & control)
+
+C ABI in DASE DLL/SO:
+
+// all pointers non-null when sizes > 0; returns 0 on success
+int dase_eval_rgb(
+    const float* field, // len=R*C*L*3
+    size_t rows, size_t cols, size_t layers,
+    int with_grad,
+    double* out_energy,
+    double* out_coherence,
+    double* out_violation,
+    float* out_grad,    // optional; len=R*C*L*3
+    float* out_mask,    // optional; len=R*C*L
+    char*  out_meta,    // JSON into caller-provided buffer
+    size_t out_meta_cap
+);
+
+Rust wrapper DaseFfiSolver implements Solver.
+
+
+B) JSON CLI (simpler to start, slower)
+
+spawn dase_cli; send a request:
+
+{"cmd":"eval_rgb","rows":R,"cols":C,"layers":L,"with_grad":true,"field"🙁...]}
+
+parse reply into DaseResult.
+
+wrapper DaseCliSolver implements Solver.
+
+
+both must be bit-for-bit deterministic given same field and same solver seed.
+
+
+---
+
+5) update rule (trainer)
+
+5.1 losses
+
+Let F be current field (RGB tensor). From DASE we receive:
+
+E energy, C coherence, V violation, and optional ∂L/∂F = G.
+
+
+Define composite loss (weights λ_* ≥ 0):
+
+L(F) = \lambda_t \cdot \underbrace{\|F - T\|_2^2}_{\text{task (optional)}}\;+\;
+       \lambda_c \cdot \underbrace{(1 - C)}_{\text{coherence loss}}\;+\;
+       \lambda_v \cdot \underbrace{V}_{\text{constraint loss}}\;+\;
+       \lambda_s \cdot \underbrace{\mathrm{TV}(F)}_{\text{total variation smoothness}}
+
+TV(F) = Σ‖F_{i,j,l} − F_{i+1,j,l}‖ + ‖F_{i,j,l} − F_{i,j+1,l}‖ (with bounds checks).
+
+T is an optional target field (for supervised runs).
+
+If DASE provides grad, use it in ∂V/∂F term; otherwise backprop through finite differences (slow) or skip gradient term and rely on proximal step (below).
+
+
+5.2 step rules (choose one; both supported)
+
+A) gradient step (when grad available)
+
+F_next = clamp01(F - η * ( λ_v * G + λ_t * ∂task/∂F + λ_s * ∂TV/∂F ));
+
+B) proximal color step (no grad; robust)
+
+apply chromatic ops towards reducing V:
+
+if local mask high → filter conflicting neighbors;
+
+if local coherence high → mix aligned neighbors;
+
+if contradiction detected (negation) → complement locally;
+
+adjust saturation with certainty heuristic.
+
+
+this is deterministic, rule-based, and fully logged.
+
+
+η (step size): tuned; keep in [1e-5, 1e-1], log each change.
+
+
+---
+
+6) training loop (deterministic)
+
+// src/training.rs
+pub struct Trainer<'a, S: Solver> {
+    pub solver: S,
+    pub cfg: TrainingCfg,
+    pub ledger: Ledger, // JSON lines logger
+    pub rng: rand_pcg::Pcg64Mcg,
+    pub phantom: std::marker::PhantomData<&'a ()>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct TrainingCfg {
+    pub iters: usize,
+    pub step_size: f32,
+    pub lambda_task: f32,
+    pub lambda_coh: f32,
+    pub lambda_violation: f32,
+    pub lambda_tv: f32,
+    pub with_grad: bool,
+    pub save_every: usize,
+    pub seed: u64,
+}
+
+impl<'a, S: Solver> Trainer<'a, S> {
+    pub fn run(&mut self, mut field: ChromaticTensor, target: Option<&ChromaticTensor>)
+        -> anyhow::Result<ChromaticTensor>
+    {
+        self.solver.reset(self.cfg.seed)?;
+        for it in 0..self.cfg.iters {
+            let res = self.solver.evaluate(&field, self.cfg.with_grad)?;
+            let loss = self.compute_loss(&field, target, &res)?;
+            let field_next = if self.cfg.with_grad && res.grad.is_some() {
+                self.step_grad(&field, &res)?
+            } else {
+                self.step_prox(&field, &res)?
+            };
+            self.ledger.append(it, &loss, &res, &field, &field_next)?;
+            if it % self.cfg.save_every == 0 { self.snapshot(it, &field_next)?; }
+            field = field_next;
+        }
+        Ok(field)
+    }
+}
+
+determinism knobs
+
+fix thread count via RAYON_NUM_THREADS and DASE’s OpenMP env (OMP_NUM_THREADS, affinity).
+
+log CPU model, flags, compiler versions, and all env vars at start.
+
+
+
+---
+
+7) ledger (audit trail)
+
+format: newline-delimited JSON (logs/run.jsonl). one record per iteration.
+
+{
+  "iter": 12,
+  "time_ms": 3.41,
+  "loss": { "total": 0.1234, "task": 0.010, "coherence": 0.450, "violation": 0.620, "tv": 0.005 },
+  "solver": { "energy": 1.234, "coherence": 0.72, "violation": 0.31 },
+  "ops": { "mode": "grad", "eta": 0.001, "lambda": {"t":1.0,"c":0.2,"v":0.7,"s":0.1} },
+  "stats": { "mean_rgb": [0.42,0.37,0.51], "std_rgb": [0.18,0.12,0.14] },
+  "hashes": { "field_in": "sha256:...", "field_out": "sha256:..." },
+  "seed": 42,
+  "env": { "threads": 24 }
+}
+
+snapshots
+
+out/frame_####.png (downsampled field visualization).
+
+out/field_####.bin (raw f32 RGB tensor, little-endian).
+
+include manifest.json with shape + endian + checksum.
+
+
+
+---
+
+😎 config files (toml)
+
+# config/engine.toml
+[engine]
+rows = 64
+cols = 64
+layers = 8
+seed = 42
+device = "cpu"        # future: "cuda"
+
+[training]
+iters = 100
+step_size = 0.001
+lambda_task = 1.0
+lambda_coh = 0.2
+lambda_violation = 0.7
+lambda_tv = 0.1
+with_grad = true
+save_every = 10
+
+
+---
+
+9) performance & memory
+
+layout is NHWC ([R,C,L,3]) to favor contiguous channel access while scanning spatially; reevaluate after profiling.
+
+use rayon for outer loops; avoid false sharing (chunk by rows or layers).
+
+DASE FFI: pass raw pointers on page-aligned buffers; avoid copies.
+
+large fields: consider tiling (tile_r, tile_c, tile_l); DASE can work tile-wise if needed.
+
+
+
+---
+
+10) testing & validation
+
+unit tests: ops clamp to [0,1]; mix(a,a) ≈ a (idempotence within tolerance); filter(a,a) ≈ 0.
+
+solver roundtrip: fixed field → fixed (E,C,V) within ±1e-6.
+
+determinism test: same seed, same env → identical ledger hashes.
+
+gradient check (if with_grad): numeric FD on a small patch vs. res.grad (≤ 1e-3 relative error).
+
+
+
+---
+
+11) failure modes & handling
+
+dimension mismatch → Err(InvalidShape); include both shapes.
+
+NaN/Inf in field or gradients → clamp, log, and abort iteration with status:"nan_guard".
+
+DASE timeout (CLI) → retry N times; on fail, persist inputs for reproducer.
+
+FFI error code → map to anyhow::Error with attached meta.
+
+
+
+---
+
+12) versioning & contracts
+
+bump protocol version when DASE result schema changes; embed proto: "chromatic-dase/0.1" in meta.
+
+never change tensor layout without a version bump + migration utility.
+
+document compiler flags for repro builds in report.md.
+
+
+
+---
+
+13) extensibility hooks (planned)
+
+add certainty channel ρ as a 4th/extra plane (rows, cols, layers, 4).
+
+add palette mapping (named colors) only at visualization stage; internal ops stay numeric.
+
+GPU path: introduce Device enum and trait facade; Candle backend can implement mix/filter/... with the same semantics.
+
+
+
+---
+
+minimal end-to-end pseudocode
+
+let cfg = load_cfg("config/engine.toml")?;
+let mut field = ChromaticTensor::random((cfg.rows, cfg.cols, cfg.layers), cfg.seed);
+
+let mut solver = DaseFfiSolver::new(dase_lib_path)?;
+let mut trainer = Trainer { solver, cfg: cfg.training, ledger: Ledger::new("logs/run.jsonl")?, rng: seeded(42), phantom: Default::default() };
+
+let final_field = trainer.run(field, None)?;
+save_png(&final_field, "out/final.png")?;
+
+
+---
+
+this gives you a clear contract for both sides:
+
+chromatic core guarantees shape, range, determinism, and logging;
+
+DASE guarantees stable scoring (and gradients if enabled) with a simple C ABI or JSON CLI.
