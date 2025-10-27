@@ -13,6 +13,7 @@ use std::time::SystemTime;
 /// A stored dream entry with tensor and evaluation metrics
 ///
 /// Enhanced for Phase 3B with class awareness, utility tracking, and timestamps
+/// Enhanced for Phase 4 with spectral features and embeddings
 #[derive(Clone)]
 pub struct DreamEntry {
     pub tensor: ChromaticTensor,
@@ -26,6 +27,12 @@ pub struct DreamEntry {
     pub timestamp: SystemTime,
     /// Number of times this dream has been retrieved (Phase 3B)
     pub usage_count: usize,
+    /// Spectral features for embedding (Phase 4)
+    pub spectral_features: Option<crate::spectral::SpectralFeatures>,
+    /// Cached embedding vector (Phase 4)
+    pub embed: Option<Vec<f32>>,
+    /// Aggregated mean utility (Phase 4)
+    pub util_mean: f32,
 }
 
 impl DreamEntry {
@@ -40,6 +47,9 @@ impl DreamEntry {
             utility: None,
             timestamp: SystemTime::now(),
             usage_count: 0,
+            spectral_features: None,
+            embed: None,
+            util_mean: 0.0,
         }
     }
 
@@ -58,6 +68,9 @@ impl DreamEntry {
             utility: None,
             timestamp: SystemTime::now(),
             usage_count: 0,
+            spectral_features: None,
+            embed: None,
+            util_mean: 0.0,
         }
     }
 

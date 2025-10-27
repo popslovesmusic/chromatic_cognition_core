@@ -7,11 +7,13 @@
 pub mod analysis;
 pub mod bias;
 pub mod diversity;
+pub mod embedding;
 pub mod experiment;
 pub mod simple_pool;
 
 pub use analysis::{compare_experiments, generate_report, ExperimentComparison, Statistics};
 pub use bias::{BiasProfile, ClassBias, SpectralBias, ChromaBias, ProfileMetadata};
 pub use diversity::{chroma_dispersion, mmr_score, retrieve_diverse_mmr, DiversityStats};
+pub use embedding::{EmbeddingMapper, QuerySignature};
 pub use experiment::{ExperimentConfig, ExperimentHarness, ExperimentResult, SeedingStrategy};
 pub use simple_pool::SimpleDreamPool;
