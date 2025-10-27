@@ -12,6 +12,7 @@ toml = "0.8"
 plotters = { version = "0.3", features = ["bitmap_backend", "bitmap_encoder"] }
 rand = { version = "0.8", features = ["std_rng"] }
 anyhow = "1.0.100"
+rustfft = "6.2"
 
 [dev-dependencies]
 serde_json = "1"

@@ -38,6 +38,7 @@ pub mod learner;
 pub mod logging;
 pub mod neural;
 pub mod solver;
+pub mod spectral;
 pub mod tensor;
 pub mod training;
 
@@ -47,6 +48,7 @@ pub use learner::{ColorClassifier, MLPClassifier, ClassifierConfig};
 pub use learner::training::{TrainingConfig, TrainingResult, train_with_dreams, train_baseline};
 pub use solver::{Solver, SolverResult};
 pub use solver::native::ChromaticNativeSolver;
+pub use spectral::{extract_spectral_features, compute_spectral_entropy, SpectralFeatures, WindowFunction};
 pub use tensor::ChromaticTensor;
 pub use tensor::gradient::GradientLayer;
 pub use tensor::operations::{complement, filter, mix, saturate};
