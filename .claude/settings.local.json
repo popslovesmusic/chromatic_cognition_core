@@ -13,7 +13,8 @@
       "Bash(cargo clean:*)",
       "Bash(cat:*)",
       "Bash(cargo check:*)",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "Read(//d/isoG/New-folder/sase_amp_fixed/**)"
     ],
     "deny": [],
     "ask": []
