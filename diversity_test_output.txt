@@ -1,0 +1,70 @@
+   Compiling chromatic_cognition_core v0.1.0 (D:\isoG\chromatic_cognition_core)
+warning: unused import: `ColorDataset`
+ --> src\learner\training.rs:6:19
+  |
+6 | use crate::data::{ColorDataset, ColorSample};
+  |                   ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `SolverResult`
+ --> src\learner\training.rs:9:29
+  |
+9 | use crate::solver::{Solver, SolverResult};
+  |                             ^^^^^^^^^^^^
+
+warning: unused variable: `rows`
+  --> src\neural\gradient.rs:33:10
+   |
+33 |     let (rows, cols, layers, _) = grad_output.shape();
+   |          ^^^^ help: if this is intentional, prefix it with an underscore: `_rows`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `cols`
+  --> src\neural\gradient.rs:33:16
+   |
+33 |     let (rows, cols, layers, _) = grad_output.shape();
+   |                ^^^^ help: if this is intentional, prefix it with an underscore: `_cols`
+
+warning: unused variable: `layers`
+  --> src\neural\gradient.rs:33:22
+   |
+33 |     let (rows, cols, layers, _) = grad_output.shape();
+   |                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_layers`
+
+warning: unused variable: `output`
+   --> src\neural\layer.rs:200:13
+    |
+200 |         let output = layer.forward(&input);
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_output`
+
+warning: `chromatic_cognition_core` (lib test) generated 6 warnings (run `cargo fix --lib -p chromatic_cognition_core --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.76s
+     Running unittests src\lib.rs (target\debug\deps\chromatic_cognition_core-f41ccc87a1753a11.exe)
+
+running 8 tests
+test dream::diversity::tests::test_diversity_stats_empty ... ok
+test dream::diversity::tests::test_euclidean_distance ... ok
+test dream::diversity::tests::test_mmr_score_relevance ... ok
+test dream::diversity::tests::test_mmr_score_diversity ... ok
+test dream::diversity::tests::test_diversity_stats ... ok
+test dream::diversity::tests::test_retrieve_diverse_mmr_with_min_dispersion ... ok
+test dream::diversity::tests::test_chroma_dispersion ... ok
+test dream::diversity::tests::test_retrieve_diverse_mmr ... FAILED
+
+failures:
+
+---- dream::diversity::tests::test_retrieve_diverse_mmr stdout ----
+
+thread 'dream::diversity::tests::test_retrieve_diverse_mmr' panicked at src\dream\diversity.rs:416:9:
+assertion failed: sig1[0] < 0.5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    dream::diversity::tests::test_retrieve_diverse_mmr
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
