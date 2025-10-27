@@ -7,7 +7,10 @@
 use crate::data::ColorClass;
 use crate::tensor::ChromaticTensor;
 use crate::solver::SolverResult;
-use std::collections::VecDeque;
+use crate::dream::soft_index::{SoftIndex, EntryId, Similarity};
+use crate::dream::embedding::{EmbeddingMapper, QuerySignature};
+use crate::dream::hybrid_scoring::{RetrievalWeights, rerank_hybrid};
+use std::collections::{VecDeque, HashMap};
 use std::time::SystemTime;
 
 /// A stored dream entry with tensor and evaluation metrics
@@ -134,14 +137,24 @@ impl Default for PoolConfig {
 pub struct SimpleDreamPool {
     entries: VecDeque<DreamEntry>,
     config: PoolConfig,
+    /// Phase 4: Soft index for semantic retrieval
+    soft_index: Option<SoftIndex>,
+    /// Phase 4: Mapping from EntryId to DreamEntry for retrieval
+    id_to_entry: HashMap<EntryId, DreamEntry>,
+    /// Phase 4: Mapping from index in entries VecDeque to EntryId
+    entry_ids: VecDeque<EntryId>,
 }
 
 impl SimpleDreamPool {
     /// Create a new dream pool with the given configuration
     pub fn new(config: PoolConfig) -> Self {
+        let max_size = config.max_size;
         Self {
-            entries: VecDeque::with_capacity(config.max_size),
+            entries: VecDeque::with_capacity(max_size),
             config,
+            soft_index: None,
+            id_to_entry: HashMap::new(),
+            entry_ids: VecDeque::with_capacity(max_size),
         }
     }
 
@@ -159,9 +172,19 @@ impl SimpleDreamPool {
         // Remove oldest entry if at capacity
         if self.entries.len() >= self.config.max_size {
             self.entries.pop_front();
+            if let Some(old_id) = self.entry_ids.pop_front() {
+                self.id_to_entry.remove(&old_id);
+            }
         }
 
+        let entry_id = EntryId::new_v4();
+        self.entry_ids.push_back(entry_id);
+        self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
+
+        // Invalidate soft index since we added a new entry
+        self.soft_index = None;
+
         true
     }
 
@@ -173,9 +196,18 @@ impl SimpleDreamPool {
 
         if self.entries.len() >= self.config.max_size {
             self.entries.pop_front();
+            if let Some(old_id) = self.entry_ids.pop_front() {
+                self.id_to_entry.remove(&old_id);
+            }
         }
 
+        let entry_id = EntryId::new_v4();
+        self.entry_ids.push_back(entry_id);
+        self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
+
+        // Invalidate soft index since we added a new entry
+        self.soft_index = None;
     }
 
     /// Add a dream entry with class label (Phase 3B)
@@ -201,9 +233,19 @@ impl SimpleDreamPool {
 
         if self.entries.len() >= self.config.max_size {
             self.entries.pop_front();
+            if let Some(old_id) = self.entry_ids.pop_front() {
+                self.id_to_entry.remove(&old_id);
+            }
         }
 
+        let entry_id = EntryId::new_v4();
+        self.entry_ids.push_back(entry_id);
+        self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
+
+        // Invalidate soft index since we added a new entry
+        self.soft_index = None;
+
         true
     }
 
@@ -458,6 +500,96 @@ impl SimpleDreamPool {
 
         let entries: Vec<DreamEntry> = self.entries.iter().cloned().collect();
         DiversityStats::compute(&entries)
+    }
+
+    /// Rebuild the soft index using the provided embedding mapper (Phase 4)
+    ///
+    /// # Arguments
+    /// * `mapper` - EmbeddingMapper to encode entries into fixed-dimensional vectors
+    /// * `bias` - Optional BiasProfile for query-time conditioning
+    ///
+    /// This method encodes all current entries and builds a fresh SoftIndex for
+    /// semantic retrieval. Should be called after adding a batch of entries or
+    /// when BiasProfile changes significantly.
+    pub fn rebuild_soft_index(
+        &mut self,
+        mapper: &EmbeddingMapper,
+        bias: Option<&crate::dream::bias::BiasProfile>,
+    ) {
+        let embed_dim = mapper.dim;
+        let mut index = SoftIndex::new(embed_dim);
+
+        // Clear old mappings
+        self.id_to_entry.clear();
+        self.entry_ids.clear();
+
+        // Encode all entries and add to index
+        for entry in &self.entries {
+            let embedding = mapper.encode_entry(entry, bias);
+            let entry_id = EntryId::new_v4();
+
+            index.add(entry_id, embedding);
+            self.id_to_entry.insert(entry_id, entry.clone());
+            self.entry_ids.push_back(entry_id);
+        }
+
+        index.build();
+        self.soft_index = Some(index);
+    }
+
+    /// Retrieve dreams using soft index with hybrid scoring (Phase 4)
+    ///
+    /// # Arguments
+    /// * `query` - QuerySignature specifying target chromatic features and hints
+    /// * `k` - Number of dreams to retrieve
+    /// * `weights` - RetrievalWeights for hybrid scoring (α·sim + β·util + γ·class + MMR)
+    /// * `mode` - Similarity metric (Cosine or Euclidean)
+    /// * `mapper` - EmbeddingMapper to encode the query
+    /// * `bias` - Optional BiasProfile for query conditioning
+    ///
+    /// # Returns
+    /// Vec<DreamEntry> ordered by hybrid score (descending)
+    ///
+    /// If soft index doesn't exist, returns empty vec. Call `rebuild_soft_index` first.
+    pub fn retrieve_soft(
+        &self,
+        query: &QuerySignature,
+        k: usize,
+        weights: &RetrievalWeights,
+        mode: Similarity,
+        mapper: &EmbeddingMapper,
+        bias: Option<&crate::dream::bias::BiasProfile>,
+    ) -> Vec<DreamEntry> {
+        // Check if soft index exists
+        let index = match &self.soft_index {
+            Some(idx) => idx,
+            None => return Vec::new(), // No index built yet
+        };
+
+        // Encode query
+        let query_embedding = mapper.encode_query(query, bias);
+
+        // Get initial k-NN from SoftIndex
+        let hits = index.query(&query_embedding, k, mode);
+
+        // Apply hybrid scoring with MMR diversity
+        let reranked = rerank_hybrid(&hits, weights, &self.id_to_entry, query.class_hint);
+
+        // Map EntryIds back to DreamEntries
+        reranked
+            .into_iter()
+            .filter_map(|(id, _score)| self.id_to_entry.get(&id).cloned())
+            .collect()
+    }
+
+    /// Check if soft index is built (Phase 4)
+    pub fn has_soft_index(&self) -> bool {
+        self.soft_index.is_some()
+    }
+
+    /// Get number of entries in the soft index (Phase 4)
+    pub fn soft_index_size(&self) -> usize {
+        self.soft_index.as_ref().map_or(0, |idx| idx.len())
     }
 }
 
