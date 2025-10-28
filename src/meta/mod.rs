@@ -10,6 +10,7 @@ pub mod ethics;
 pub mod log;
 pub mod predict;
 pub mod reflection;
+pub mod trend;
 
 pub use adapter::{MetaAdapter, MetaCycleReport, TrainingControls};
 pub use awareness::{Awareness, Observation};
@@ -18,3 +19,4 @@ pub use ethics::{EthicsBounds, EthicsGuard, EthicsVerdict, InterventionSpec, Ver
 pub use log::{ControlStateSnapshot, MetaActionStatus, MetaLogEntry, MetaLogger};
 pub use predict::{Feature, FeatureForecast, PredictionSet, Predictor};
 pub use reflection::{plan_reflection, Plan, PlanStep, ReflectionAction};
+pub use trend::{detect_anomaly, fit_trend, CycleRecord, TrendModel};

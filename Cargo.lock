@@ -80,6 +80,7 @@ name = "chromatic_cognition_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "ndarray",
  "plotters",
  "rand",
@@ -100,6 +101,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]

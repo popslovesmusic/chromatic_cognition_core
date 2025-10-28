@@ -35,3 +35,8 @@ cool_tint_max = 0.2
 pause_aug_max_steps = 200
 ethics_hue_jump_deg = 90
 log_every = 1
+
+[p6b]
+trend_window = 20
+trend_drift_limit = 0.03
+oscillation_limit = 0.15

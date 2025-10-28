@@ -365,6 +365,65 @@ impl Default for Phase5CConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Phase6BConfig {
+    pub trend_window: usize,
+    pub trend_drift_limit: f32,
+    pub oscillation_limit: f32,
+}
+
+impl Phase6BConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(&path)?;
+        Self::from_str(&contents)
+    }
+
+    pub fn from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        let value: Value =
+            toml::from_str(toml_str).map_err(|err| ConfigError::Parse(err.to_string()))?;
+        let table = value
+            .get("p6b")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default();
+
+        let trend_window = table
+            .get("trend_window")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(2) as usize)
+            .unwrap_or(20)
+            .min(512);
+
+        let trend_drift_limit = table
+            .get("trend_drift_limit")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).max(0.0))
+            .unwrap_or(0.03);
+
+        let oscillation_limit = table
+            .get("oscillation_limit")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).clamp(0.0, 1.0))
+            .unwrap_or(0.15);
+
+        Ok(Self {
+            trend_window,
+            trend_drift_limit,
+            oscillation_limit,
+        })
+    }
+}
+
+impl Default for Phase6BConfig {
+    fn default() -> Self {
+        Self {
+            trend_window: 20,
+            trend_drift_limit: 0.03,
+            oscillation_limit: 0.15,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     Io(std::io::Error),
@@ -428,5 +487,23 @@ mod tests {
         assert_eq!(config.bounds.pause_aug_max_steps, 50);
         assert_eq!(config.bounds.ethics_hue_jump_deg, 60.0);
         assert_eq!(config.log_every, 3);
+    }
+
+    #[test]
+    fn phase6b_config_defaults_when_missing() {
+        let toml = "[engine]\nrows = 8";
+        let config = Phase6BConfig::from_str(toml).unwrap();
+        assert_eq!(config.trend_window, 20);
+        assert!((config.trend_drift_limit - 0.03).abs() < f32::EPSILON);
+        assert!((config.oscillation_limit - 0.15).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn phase6b_config_parses_custom_values() {
+        let toml = "[p6b]\ntrend_window = 32\ntrend_drift_limit = 0.05\noscillation_limit = 0.2";
+        let config = Phase6BConfig::from_str(toml).unwrap();
+        assert_eq!(config.trend_window, 32);
+        assert!((config.trend_drift_limit - 0.05).abs() < f32::EPSILON);
+        assert!((config.oscillation_limit - 0.2).abs() < f32::EPSILON);
     }
 }
