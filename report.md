@@ -39,3 +39,6 @@
 - `Phase5CConfig` exposes adjustable safety bounds (`lr_damp_max`, `cool_tint_max`, `pause_aug_max_steps`, `ethics_hue_jump_deg`) with unit coverage for default and custom parsing.
 - Phase 6C continuity controller translates trend slopes into bounded temporal actions, applies cooldown-governed updates to learning rate and dream-pool size, and normalizes phase weights when oscillations emerge.
 - `Phase6CConfig` adds cadence and adjustment bounds (`cycle_interval`, `lr_adjust_max`, `dream_pool_expand_max`, `trend_anomaly_cooldown`) for the continuity loop with parsing tests.
+- Phase 6D diagnostics normalize trend slopes into a deterministic risk score, feeding a predictive state into continuity planning before heuristics fire.
+- `Phase6DConfig` surfaces `[p6d]` thresholds, risk weights, and action delay while unit tests cover default and custom parsing.
+- Documentation set expanded with `DIAGNOSTICS_SPEC.md`, Phase 6D validation results, and integration logs capturing pre-emptive actions.

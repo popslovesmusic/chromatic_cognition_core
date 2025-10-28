@@ -433,6 +433,149 @@ impl Default for Phase6CConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Phase6DRiskWeight {
+    pub loss: f32,
+    pub entropy: f32,
+    pub coherence: f32,
+    pub oscillation: f32,
+}
+
+impl Phase6DRiskWeight {
+    pub fn normalized(&self) -> Self {
+        let sum = self.loss + self.entropy + self.coherence + self.oscillation;
+        if sum <= f32::EPSILON {
+            return Self::default();
+        }
+
+        Self {
+            loss: (self.loss / sum).clamp(0.0, 1.0),
+            entropy: (self.entropy / sum).clamp(0.0, 1.0),
+            coherence: (self.coherence / sum).clamp(0.0, 1.0),
+            oscillation: (self.oscillation / sum).clamp(0.0, 1.0),
+        }
+    }
+}
+
+impl Default for Phase6DRiskWeight {
+    fn default() -> Self {
+        Self {
+            loss: 0.4,
+            entropy: 0.3,
+            coherence: 0.2,
+            oscillation: 0.1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Phase6DConfig {
+    pub loss_slope_limit: f32,
+    pub entropy_drift_limit: f32,
+    pub coherence_decay_limit: f32,
+    pub oscillation_index_limit: f32,
+    pub risk_weight: Phase6DRiskWeight,
+    pub action_delay: usize,
+}
+
+impl Phase6DConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(&path)?;
+        Self::from_str(&contents)
+    }
+
+    pub fn from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        let value: Value =
+            toml::from_str(toml_str).map_err(|err| ConfigError::Parse(err.to_string()))?;
+        let table = value
+            .get("p6d")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default();
+
+        let loss_slope_limit = table
+            .get("loss_slope_limit")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).max(1e-6))
+            .unwrap_or(0.03);
+
+        let entropy_drift_limit = table
+            .get("entropy_drift_limit")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).max(1e-6))
+            .unwrap_or(0.03);
+
+        let coherence_decay_limit = table
+            .get("coherence_decay_limit")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).max(1e-6))
+            .unwrap_or(0.02);
+
+        let oscillation_index_limit = table
+            .get("oscillation_index_limit")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).max(1e-6))
+            .unwrap_or(0.1);
+
+        let risk_weight_table = table
+            .get("risk_weight")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default();
+
+        let risk_weight = Phase6DRiskWeight {
+            loss: risk_weight_table
+                .get("loss")
+                .and_then(|v| v.as_float())
+                .map(|v| v as f32)
+                .unwrap_or(0.4),
+            entropy: risk_weight_table
+                .get("entropy")
+                .and_then(|v| v.as_float())
+                .map(|v| v as f32)
+                .unwrap_or(0.3),
+            coherence: risk_weight_table
+                .get("coherence")
+                .and_then(|v| v.as_float())
+                .map(|v| v as f32)
+                .unwrap_or(0.2),
+            oscillation: risk_weight_table
+                .get("oscillation")
+                .and_then(|v| v.as_float())
+                .map(|v| v as f32)
+                .unwrap_or(0.1),
+        };
+
+        let action_delay = table
+            .get("action_delay")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(0) as usize)
+            .unwrap_or(2);
+
+        Ok(Self {
+            loss_slope_limit,
+            entropy_drift_limit,
+            coherence_decay_limit,
+            oscillation_index_limit,
+            risk_weight,
+            action_delay,
+        })
+    }
+}
+
+impl Default for Phase6DConfig {
+    fn default() -> Self {
+        Self {
+            loss_slope_limit: 0.03,
+            entropy_drift_limit: 0.03,
+            coherence_decay_limit: 0.02,
+            oscillation_index_limit: 0.1,
+            risk_weight: Phase6DRiskWeight::default(),
+            action_delay: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Phase6BConfig {
     pub trend_window: usize,
     pub trend_drift_limit: f32,
@@ -592,5 +735,31 @@ mod tests {
         assert_eq!(config.trend_window, 32);
         assert!((config.trend_drift_limit - 0.05).abs() < f32::EPSILON);
         assert!((config.oscillation_limit - 0.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn phase6d_config_defaults_when_missing() {
+        let toml = "[engine]\nrows = 8";
+        let config = Phase6DConfig::from_str(toml).unwrap();
+        assert!((config.loss_slope_limit - 0.03).abs() < f32::EPSILON);
+        assert_eq!(config.action_delay, 2);
+        let weights = config.risk_weight.normalized();
+        let sum = weights.loss + weights.entropy + weights.coherence + weights.oscillation;
+        assert!((sum - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn phase6d_config_parses_custom_values() {
+        let toml = "[p6d]\nloss_slope_limit = 0.05\nentropy_drift_limit = 0.04\ncoherence_decay_limit = 0.03\noscillation_index_limit = 0.2\naction_delay = 4\n[p6d.risk_weight]\nloss = 0.3\nentropy = 0.4\ncoherence = 0.2\noscillation = 0.1";
+        let config = Phase6DConfig::from_str(toml).unwrap();
+        assert!((config.loss_slope_limit - 0.05).abs() < f32::EPSILON);
+        assert!((config.entropy_drift_limit - 0.04).abs() < f32::EPSILON);
+        assert!((config.coherence_decay_limit - 0.03).abs() < f32::EPSILON);
+        assert!((config.oscillation_index_limit - 0.2).abs() < f32::EPSILON);
+        assert_eq!(config.action_delay, 4);
+        assert!((config.risk_weight.loss - 0.3).abs() < f32::EPSILON);
+        assert!((config.risk_weight.entropy - 0.4).abs() < f32::EPSILON);
+        assert!((config.risk_weight.coherence - 0.2).abs() < f32::EPSILON);
+        assert!((config.risk_weight.oscillation - 0.1).abs() < f32::EPSILON);
     }
 }

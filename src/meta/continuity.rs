@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::config::Phase6CConfig;
 
+use super::diagnostics::{evaluate_diagnostics, DiagnosticState};
 use super::trend::TrendModel;
 
 const LOSS_SLOPE_THRESHOLD: f32 = 0.005;
@@ -19,6 +20,7 @@ const ENTROPY_THRESHOLD: f32 = 0.005;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum TemporalAction {
     AdjustLR(f32),
+    DampLearningRate(f32),
     ExpandDreamPool(usize),
     ContractDreamPool(usize),
     ResetPhaseWeights,
@@ -73,8 +75,18 @@ pub fn should_invoke_continuity(cycle: usize) -> bool {
 pub fn plan_temporal_action(trend: &TrendModel) -> Option<TemporalAction> {
     let config = Phase6CConfig::default();
 
-    if trend.oscillation_period > 0.0 {
-        return Some(TemporalAction::ResetPhaseWeights);
+    let diagnostics = evaluate_diagnostics(trend);
+    match diagnostics.state_label {
+        DiagnosticState::Stable => {}
+        DiagnosticState::Oscillating => {
+            return Some(TemporalAction::DampLearningRate(0.05));
+        }
+        DiagnosticState::Degrading => {
+            return Some(TemporalAction::ExpandDreamPool(25));
+        }
+        DiagnosticState::Diverging => {
+            return Some(TemporalAction::ResetPhaseWeights);
+        }
     }
 
     if trend.slope_loss > LOSS_SLOPE_THRESHOLD {
@@ -122,6 +134,11 @@ pub fn apply_temporal_action(action: &TemporalAction, ctx: &mut TrainCtx) {
         TemporalAction::AdjustLR(delta) => {
             let clipped = delta.clamp(-config.lr_adjust_max, config.lr_adjust_max);
             let factor = (1.0 + clipped).max(1e-6);
+            ctx.learning_rate *= factor;
+        }
+        TemporalAction::DampLearningRate(amount) => {
+            let damping = amount.clamp(0.0, config.lr_adjust_max);
+            let factor = (1.0 - damping).max(1e-6);
             ctx.learning_rate *= factor;
         }
         TemporalAction::ExpandDreamPool(amount) => {
@@ -181,8 +198,14 @@ mod tests {
     }
 
     #[test]
-    fn planner_resets_weights_on_oscillation_detection() {
+    fn planner_damps_learning_rate_on_oscillation_detection() {
         let action = plan_temporal_action(&trend(0.0, 0.0, 0.0, 4.0)).unwrap();
+        assert_eq!(action, TemporalAction::DampLearningRate(0.05));
+    }
+
+    #[test]
+    fn planner_resets_weights_on_divergence() {
+        let action = plan_temporal_action(&trend(0.1, 0.0, 0.0, 0.0)).unwrap();
         assert_eq!(action, TemporalAction::ResetPhaseWeights);
     }
 
@@ -199,6 +222,16 @@ mod tests {
             Phase6CConfig::default().trend_anomaly_cooldown
         );
         assert_eq!(ctx.last_action_cycle, Some(5));
+    }
+
+    #[test]
+    fn apply_damp_learning_rate_clamps_amount() {
+        let mut ctx = TrainCtx::new(0.2, 32, vec![0.5, 0.3, 0.2]);
+        ctx.cycle = 7;
+        apply_temporal_action(&TemporalAction::DampLearningRate(0.5), &mut ctx);
+        let max_delta = Phase6CConfig::default().lr_adjust_max;
+        let expected = 0.2 * (1.0 - max_delta);
+        assert!((ctx.learning_rate - expected).abs() < 1e-6);
     }
 
     #[test]

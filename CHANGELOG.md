@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **meta::continuity** - Temporal regulator translating trend slopes into bounded learning-rate and dream-pool adjustments with cooldowns.
 - **Phase6CConfig** - Parses `[p6c]` cadence and action bounds for the continuity loop.
 
+### Added - Phase 6D Predictive Diagnostics
+- **meta::diagnostics** - Normalizes trend slopes into deterministic `DiagnosticModel` instances with repeatable risk scoring.
+- **Phase6DConfig** - Parses `[p6d]` thresholds and risk weights, keeping actions bounded by continuity limits.
+- **Continuity integration** - `plan_temporal_action` now queries Phase 6D before applying heuristic adjustments, enabling damp and reset pre-emption.
+- **Documentation** - Added `DIAGNOSTICS_SPEC.md`, validation report, and integration log covering oscillation and drift case studies.
+
 #### Solver Module
 - **`Solver` trait** - Interface for chromatic field evaluators
 - **`SolverResult`** - Standardized result structure (energy, coherence, violation, gradients)
