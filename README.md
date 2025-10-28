@@ -48,6 +48,8 @@ This will:
 cargo test
 ```
 
+See [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) for the latest recorded results, environment details, and reproduction steps.
+
 ## Architecture
 
 ### Core Types

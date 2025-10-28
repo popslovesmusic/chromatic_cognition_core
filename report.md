@@ -33,6 +33,7 @@
 - Training examples now populate the `TrainingConfig::retrieval_mode` field and use the current solver signature so `cargo test` builds all binaries without manual fixes.
 - The Phase 3B validation scenario performs class-aware dream mixing, captures Δloss feedback into the utility aggregator, and writes the synthesized bias profile to `logs/phase_3b_bias_profile.json`.
 - Dream module documentation snippets import `PoolConfig` from the correct module and avoid non-ASCII operators, keeping doctests green.
-- Regression suite: `cargo test` exercises 101 unit tests, 6 integration tests, and 20 doctests in 21.47s on CPU-only hardware.
+- Regression suite: `cargo test` exercises 121 unit tests, 6 integration tests, and 20 doctests in ~48s on CPU-only hardware (cold build compile time: 2m14s).
+- Detailed execution log captured in `docs/TEST_REPORT.md` with suite durations and reproduction steps.
 - Phase 5C ethics filter clips unsafe learning-rate, tint, and augmentation directives, rolls back on violations, and journals every decision to `logs/meta.jsonl`.
 - `Phase5CConfig` exposes adjustable safety bounds (`lr_damp_max`, `cool_tint_max`, `pause_aug_max_steps`, `ethics_hue_jump_deg`) with unit coverage for default and custom parsing.

@@ -264,6 +264,7 @@ Current benchmarks on 64×64×8 tensor (130,560 cells):
 ### Added
 
 - Phase 5B dissonance scoring module with meta-log output and adaptive reflection planner driven by configurable thresholds.
+- Regression testing documentation capturing `cargo test` results and reproduction steps (`docs/TEST_REPORT.md`).
 
 ### Planned for Milestone 2: Gradient Projection + Logger
 
