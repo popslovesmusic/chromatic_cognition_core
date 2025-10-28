@@ -28,3 +28,10 @@ actions = ["SeedFrom", "DampLR", "CoolTint", "PauseAug"]
 coherence = 0.5
 entropy = 0.3
 energy = 0.2
+
+[p5c]
+lr_damp_max = 0.5
+cool_tint_max = 0.2
+pause_aug_max_steps = 200
+ethics_hue_jump_deg = 90
+log_every = 1

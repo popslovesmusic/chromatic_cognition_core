@@ -11,6 +11,7 @@ use serde::Serialize;
 use toml::Value;
 
 use crate::meta::dissonance::DissonanceWeights;
+use crate::meta::ethics::EthicsBounds;
 use crate::meta::predict::Feature;
 use crate::meta::reflection::ReflectionAction;
 
@@ -279,6 +280,91 @@ impl Default for Phase5BConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Phase5CConfig {
+    pub bounds: EthicsBounds,
+    pub log_every: usize,
+}
+
+impl Phase5CConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(&path)?;
+        Self::from_str(&contents)
+    }
+
+    pub fn from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        let value: Value =
+            toml::from_str(toml_str).map_err(|err| ConfigError::Parse(err.to_string()))?;
+        let table = value
+            .get("p5c")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default();
+
+        let lr_damp_max = table
+            .get("lr_damp_max")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).clamp(0.0, 1.0))
+            .unwrap_or(0.5);
+
+        let cool_tint_max = table
+            .get("cool_tint_max")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).clamp(0.0, 1.0))
+            .unwrap_or(0.2);
+
+        let pause_aug_max_steps = table
+            .get("pause_aug_max_steps")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(0) as usize)
+            .unwrap_or(200);
+
+        let ethics_hue_jump_deg = table
+            .get("ethics_hue_jump_deg")
+            .map(|value| {
+                if let Some(float) = value.as_float() {
+                    float as f32
+                } else if let Some(int) = value.as_integer() {
+                    int as f32
+                } else {
+                    90.0
+                }
+            })
+            .unwrap_or(90.0)
+            .max(0.0);
+
+        let log_every = table
+            .get("log_every")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(1) as usize)
+            .unwrap_or(1);
+
+        Ok(Self {
+            bounds: EthicsBounds {
+                lr_damp_max,
+                cool_tint_max,
+                pause_aug_max_steps,
+                ethics_hue_jump_deg,
+            },
+            log_every,
+        })
+    }
+}
+
+impl Default for Phase5CConfig {
+    fn default() -> Self {
+        Self {
+            bounds: EthicsBounds {
+                lr_damp_max: 0.5,
+                cool_tint_max: 0.2,
+                pause_aug_max_steps: 200,
+                ethics_hue_jump_deg: 90.0,
+            },
+            log_every: 1,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     Io(std::io::Error),
@@ -323,5 +409,24 @@ mod tests {
             config.features,
             vec![Feature::Coherence, Feature::GradEnergy]
         );
+    }
+
+    #[test]
+    fn phase5c_config_defaults_when_missing() {
+        let toml = "[engine]\nrows = 8";
+        let config = Phase5CConfig::from_str(toml).unwrap();
+        assert_eq!(config.bounds.lr_damp_max, 0.5);
+        assert_eq!(config.log_every, 1);
+    }
+
+    #[test]
+    fn phase5c_config_parses_custom_values() {
+        let toml = "[p5c]\nlr_damp_max = 0.4\ncool_tint_max = 0.1\npause_aug_max_steps = 50\nethics_hue_jump_deg = 60\nlog_every = 3";
+        let config = Phase5CConfig::from_str(toml).unwrap();
+        assert_eq!(config.bounds.lr_damp_max, 0.4);
+        assert_eq!(config.bounds.cool_tint_max, 0.1);
+        assert_eq!(config.bounds.pause_aug_max_steps, 50);
+        assert_eq!(config.bounds.ethics_hue_jump_deg, 60.0);
+        assert_eq!(config.log_every, 3);
     }
 }

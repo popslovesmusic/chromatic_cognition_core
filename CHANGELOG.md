@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phase5AConfig** - Parses `[p5a]` sections with horizon and feature set defaults.
 - **Config/Docs** - Updated README and engine TOML to expose Phase 5A controls.
 
+### Added - Phase 5C Ethics Filter & Meta-Adapter
+- **meta::ethics** - Configurable `EthicsGuard` with clipping verdicts for learning rate, tint, and augmentation controls.
+- **meta::adapter** - Deterministic adapter that applies reflection plans, supports rollbacks, and exports `MetaCycleReport`.
+- **meta::log** - JSONL meta-journal with ordered sequence numbers and sampling via `log_every`.
+- **Phase5CConfig** - Parses `[p5c]` safety bounds (`lr_damp_max`, `cool_tint_max`, `pause_aug_max_steps`, `ethics_hue_jump_deg`).
+- **TrainingControls** - Canonical self-regulation state shared with Instinct Kernel integrations.
+
 #### Solver Module
 - **`Solver` trait** - Interface for chromatic field evaluators
 - **`SolverResult`** - Standardized result structure (energy, coherence, violation, gradients)
