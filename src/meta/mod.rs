@@ -5,6 +5,7 @@
 
 pub mod adapter;
 pub mod awareness;
+pub mod continuity;
 pub mod dissonance;
 pub mod ethics;
 pub mod log;
@@ -14,6 +15,9 @@ pub mod trend;
 
 pub use adapter::{MetaAdapter, MetaCycleReport, TrainingControls};
 pub use awareness::{Awareness, Observation};
+pub use continuity::{
+    apply_temporal_action, plan_temporal_action, should_invoke_continuity, TemporalAction, TrainCtx,
+};
 pub use dissonance::{Dissonance, DissonanceWeights};
 pub use ethics::{EthicsBounds, EthicsGuard, EthicsVerdict, InterventionSpec, VerdictStatus};
 pub use log::{ControlStateSnapshot, MetaActionStatus, MetaLogEntry, MetaLogger};

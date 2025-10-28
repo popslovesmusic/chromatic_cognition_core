@@ -366,6 +366,73 @@ impl Default for Phase5CConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Phase6CConfig {
+    pub cycle_interval: usize,
+    pub lr_adjust_max: f32,
+    pub dream_pool_expand_max: usize,
+    pub trend_anomaly_cooldown: usize,
+}
+
+impl Phase6CConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(&path)?;
+        Self::from_str(&contents)
+    }
+
+    pub fn from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        let value: Value =
+            toml::from_str(toml_str).map_err(|err| ConfigError::Parse(err.to_string()))?;
+        let table = value
+            .get("p6c")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default();
+
+        let cycle_interval = table
+            .get("cycle_interval")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(1) as usize)
+            .unwrap_or(10);
+
+        let lr_adjust_max = table
+            .get("lr_adjust_max")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).max(0.0))
+            .unwrap_or(0.2);
+
+        let dream_pool_expand_max = table
+            .get("dream_pool_expand_max")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(0) as usize)
+            .unwrap_or(50);
+
+        let trend_anomaly_cooldown = table
+            .get("trend_anomaly_cooldown")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.max(0) as usize)
+            .unwrap_or(5);
+
+        Ok(Self {
+            cycle_interval,
+            lr_adjust_max,
+            dream_pool_expand_max,
+            trend_anomaly_cooldown,
+        })
+    }
+}
+
+impl Default for Phase6CConfig {
+    fn default() -> Self {
+        Self {
+            cycle_interval: 10,
+            lr_adjust_max: 0.2,
+            dream_pool_expand_max: 50,
+            trend_anomaly_cooldown: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Phase6BConfig {
     pub trend_window: usize,
     pub trend_drift_limit: f32,
@@ -487,6 +554,26 @@ mod tests {
         assert_eq!(config.bounds.pause_aug_max_steps, 50);
         assert_eq!(config.bounds.ethics_hue_jump_deg, 60.0);
         assert_eq!(config.log_every, 3);
+    }
+
+    #[test]
+    fn phase6c_config_defaults_when_missing() {
+        let toml = "[engine]\nrows = 8";
+        let config = Phase6CConfig::from_str(toml).unwrap();
+        assert_eq!(config.cycle_interval, 10);
+        assert!((config.lr_adjust_max - 0.2).abs() < f32::EPSILON);
+        assert_eq!(config.dream_pool_expand_max, 50);
+        assert_eq!(config.trend_anomaly_cooldown, 5);
+    }
+
+    #[test]
+    fn phase6c_config_parses_custom_values() {
+        let toml = "[p6c]\ncycle_interval = 6\nlr_adjust_max = 0.15\ndream_pool_expand_max = 12\ntrend_anomaly_cooldown = 9";
+        let config = Phase6CConfig::from_str(toml).unwrap();
+        assert_eq!(config.cycle_interval, 6);
+        assert!((config.lr_adjust_max - 0.15).abs() < f32::EPSILON);
+        assert_eq!(config.dream_pool_expand_max, 12);
+        assert_eq!(config.trend_anomaly_cooldown, 9);
     }
 
     #[test]

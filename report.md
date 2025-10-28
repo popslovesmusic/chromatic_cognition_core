@@ -37,3 +37,5 @@
 - Detailed execution log captured in `docs/TEST_REPORT.md` with suite durations and reproduction steps.
 - Phase 5C ethics filter clips unsafe learning-rate, tint, and augmentation directives, rolls back on violations, and journals every decision to `logs/meta.jsonl`.
 - `Phase5CConfig` exposes adjustable safety bounds (`lr_damp_max`, `cool_tint_max`, `pause_aug_max_steps`, `ethics_hue_jump_deg`) with unit coverage for default and custom parsing.
+- Phase 6C continuity controller translates trend slopes into bounded temporal actions, applies cooldown-governed updates to learning rate and dream-pool size, and normalizes phase weights when oscillations emerge.
+- `Phase6CConfig` adds cadence and adjustment bounds (`cycle_interval`, `lr_adjust_max`, `dream_pool_expand_max`, `trend_anomaly_cooldown`) for the continuity loop with parsing tests.

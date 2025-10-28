@@ -40,3 +40,9 @@ log_every = 1
 trend_window = 20
 trend_drift_limit = 0.03
 oscillation_limit = 0.15
+
+[p6c]
+cycle_interval = 10
+lr_adjust_max = 0.2
+dream_pool_expand_max = 50
+trend_anomaly_cooldown = 5

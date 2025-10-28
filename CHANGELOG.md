@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phase5CConfig** - Parses `[p5c]` safety bounds (`lr_damp_max`, `cool_tint_max`, `pause_aug_max_steps`, `ethics_hue_jump_deg`).
 - **TrainingControls** - Canonical self-regulation state shared with Instinct Kernel integrations.
 
+### Added - Phase 6C Continuity Control
+- **meta::continuity** - Temporal regulator translating trend slopes into bounded learning-rate and dream-pool adjustments with cooldowns.
+- **Phase6CConfig** - Parses `[p6c]` cadence and action bounds for the continuity loop.
+
 #### Solver Module
 - **`Solver` trait** - Interface for chromatic field evaluators
 - **`SolverResult`** - Standardized result structure (energy, coherence, violation, gradients)
