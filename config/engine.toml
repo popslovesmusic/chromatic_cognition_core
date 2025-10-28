@@ -15,3 +15,7 @@ delta = 0.05
 mmr_lambda = 0.7
 refresh_interval_steps = 500
 drift_threshold = 0.08
+
+[p5a]
+predict_horizon = 2
+features = ["coherence", "entropy", "grad_energy"]

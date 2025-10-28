@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added - Native Rust Solver
 
+### Added - Phase 5A Awareness & Prediction
+- **meta::awareness** - `Awareness` collector with bounded history and deterministic statistics (`observe`).
+- **meta::predict** - AR(2) `Predictor` with bounded forecasts for coherence, entropy, and gradient energy.
+- **Phase5AConfig** - Parses `[p5a]` sections with horizon and feature set defaults.
+- **Config/Docs** - Updated README and engine TOML to expose Phase 5A controls.
+
 #### Solver Module
 - **`Solver` trait** - Interface for chromatic field evaluators
 - **`SolverResult`** - Standardized result structure (energy, coherence, violation, gradients)

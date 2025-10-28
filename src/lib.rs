@@ -36,6 +36,7 @@ pub mod data;
 pub mod dream;
 pub mod learner;
 pub mod logging;
+pub mod meta;
 pub mod neural;
 pub mod solver;
 pub mod spectral;
@@ -43,14 +44,17 @@ pub mod tensor;
 pub mod training;
 
 pub use config::EngineConfig;
-pub use dream::{SimpleDreamPool, BiasProfile, ClassBias, SpectralBias, ChromaBias};
-pub use learner::{ColorClassifier, MLPClassifier, ClassifierConfig};
-pub use learner::feedback::{FeedbackRecord, UtilityAggregator, ClassUtilityStats};
-pub use learner::training::{TrainingConfig, TrainingResult, train_with_dreams, train_baseline};
-pub use solver::{Solver, SolverResult};
+pub use dream::{BiasProfile, ChromaBias, ClassBias, SimpleDreamPool, SpectralBias};
+pub use learner::feedback::{ClassUtilityStats, FeedbackRecord, UtilityAggregator};
+pub use learner::training::{train_baseline, train_with_dreams, TrainingConfig, TrainingResult};
+pub use learner::{ClassifierConfig, ColorClassifier, MLPClassifier};
+pub use meta::{Awareness, Feature, FeatureForecast, Observation, PredictionSet, Predictor};
 pub use solver::native::ChromaticNativeSolver;
-pub use spectral::{extract_spectral_features, compute_spectral_entropy, SpectralFeatures, WindowFunction};
-pub use tensor::ChromaticTensor;
+pub use solver::{Solver, SolverResult};
+pub use spectral::{
+    compute_spectral_entropy, extract_spectral_features, SpectralFeatures, WindowFunction,
+};
 pub use tensor::gradient::GradientLayer;
 pub use tensor::operations::{complement, filter, mix, saturate};
-pub use training::{TrainingMetrics, mse_loss};
+pub use tensor::ChromaticTensor;
+pub use training::{mse_loss, TrainingMetrics};

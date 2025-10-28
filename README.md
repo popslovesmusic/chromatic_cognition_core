@@ -11,6 +11,7 @@ A deterministic Rust engine that represents cognition as an RGB tensor field. Ea
 - **Training Support**: MSE loss computation and metrics tracking
 - **Configuration**: TOML-based engine configuration
 - **Logging**: JSON line-delimited operation and training logs
+- **Meta Awareness**: Cycle-level observation and autoregressive prediction of coherence signals
 
 ## Quick Start
 
@@ -106,6 +107,14 @@ let gradient = GradientLayer::from_tensor(&tensor);
 gradient.to_png("output/frame.png")?;
 ```
 
+### Awareness & Prediction
+
+Phase 5A introduces deterministic telemetry and short-term forecasting:
+
+- `Awareness::observe` captures coherence, entropy, gradient energy, and spectral bands each cycle.
+- `Predictor::new` creates an AR(2) forecaster for configured features and horizon.
+- `Predictor::predict` returns bounded forecasts suitable for scheduling dream pool refreshes.
+
 ### Configuration
 
 Configure engine parameters via `config/engine.toml`:
@@ -117,6 +126,10 @@ cols = 64
 layers = 8
 seed = 42
 device = "cpu"
+
+[p5a]
+predict_horizon = 2
+features = ["coherence", "entropy", "grad_energy"]
 ```
 
 Load configuration in your code:
@@ -155,6 +168,7 @@ chromatic_cognition_core/
 ├── src/
 │   ├── lib.rs               # Library exports
 │   ├── config.rs            # Configuration parsing
+│   ├── meta/                # Awareness and prediction utilities
 │   ├── logging.rs           # JSON logging utilities
 │   ├── training.rs          # Loss computation and metrics
 │   └── tensor/
