@@ -4,3 +4,14 @@ cols = 64
 layers = 8
 seed = 42
 device = "cpu"
+
+[phase4]
+embed_dim = 64
+similarity = "cosine"
+alpha = 0.65
+beta = 0.20
+gamma = 0.10
+delta = 0.05
+mmr_lambda = 0.7
+refresh_interval_steps = 500
+drift_threshold = 0.08
