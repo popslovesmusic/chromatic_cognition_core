@@ -10,7 +10,9 @@ use std::str::FromStr;
 use serde::Serialize;
 use toml::Value;
 
+use crate::meta::dissonance::DissonanceWeights;
 use crate::meta::predict::Feature;
+use crate::meta::reflection::ReflectionAction;
 
 /// Engine configuration loaded from TOML file.
 ///
@@ -175,6 +177,104 @@ impl Default for Phase5AConfig {
         Self {
             predict_horizon: 2,
             features: Self::default_features(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Phase5BConfig {
+    pub dissonance_threshold: f32,
+    pub weights: DissonanceWeights,
+    pub actions: Vec<ReflectionAction>,
+}
+
+impl Phase5BConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(&path)?;
+        Self::from_str(&contents)
+    }
+
+    pub fn from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        let value: Value =
+            toml::from_str(toml_str).map_err(|err| ConfigError::Parse(err.to_string()))?;
+        let table = value
+            .get("p5b")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default();
+
+        let threshold = table
+            .get("dissonance_threshold")
+            .and_then(|v| v.as_float())
+            .map(|v| (v as f32).clamp(0.0, 1.0))
+            .unwrap_or(0.25);
+
+        let weights = table
+            .get("weights")
+            .and_then(|value| value.as_table())
+            .map(|weights| DissonanceWeights {
+                coherence: weights
+                    .get("coherence")
+                    .and_then(|v| v.as_float())
+                    .map(|v| v as f32)
+                    .unwrap_or(0.5),
+                entropy: weights
+                    .get("entropy")
+                    .and_then(|v| v.as_float())
+                    .map(|v| v as f32)
+                    .unwrap_or(0.3),
+                energy: weights
+                    .get("energy")
+                    .and_then(|v| v.as_float())
+                    .map(|v| v as f32)
+                    .unwrap_or(0.2),
+            })
+            .unwrap_or_else(Self::default_weights);
+
+        let actions = table
+            .get("actions")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .filter_map(|name| name.parse::<ReflectionAction>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|actions| !actions.is_empty())
+            .unwrap_or_else(Self::default_actions);
+
+        Ok(Self {
+            dissonance_threshold: threshold,
+            weights: weights.normalised(),
+            actions,
+        })
+    }
+
+    fn default_weights() -> DissonanceWeights {
+        DissonanceWeights {
+            coherence: 0.5,
+            entropy: 0.3,
+            energy: 0.2,
+        }
+    }
+
+    fn default_actions() -> Vec<ReflectionAction> {
+        vec![
+            ReflectionAction::SeedFrom,
+            ReflectionAction::DampLr,
+            ReflectionAction::CoolTint,
+            ReflectionAction::PauseAug,
+        ]
+    }
+}
+
+impl Default for Phase5BConfig {
+    fn default() -> Self {
+        Self {
+            dissonance_threshold: 0.25,
+            weights: Self::default_weights().normalised(),
+            actions: Self::default_actions(),
         }
     }
 }

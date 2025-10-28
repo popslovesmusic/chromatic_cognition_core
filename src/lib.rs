@@ -43,12 +43,15 @@ pub mod spectral;
 pub mod tensor;
 pub mod training;
 
-pub use config::EngineConfig;
+pub use config::{EngineConfig, Phase5AConfig, Phase5BConfig};
 pub use dream::{BiasProfile, ChromaBias, ClassBias, SimpleDreamPool, SpectralBias};
 pub use learner::feedback::{ClassUtilityStats, FeedbackRecord, UtilityAggregator};
 pub use learner::training::{train_baseline, train_with_dreams, TrainingConfig, TrainingResult};
 pub use learner::{ClassifierConfig, ColorClassifier, MLPClassifier};
-pub use meta::{Awareness, Feature, FeatureForecast, Observation, PredictionSet, Predictor};
+pub use meta::{
+    plan_reflection, Awareness, Dissonance, DissonanceWeights, Feature, FeatureForecast,
+    Observation, Plan, PlanStep, PredictionSet, Predictor, ReflectionAction,
+};
 pub use solver::native::ChromaticNativeSolver;
 pub use solver::{Solver, SolverResult};
 pub use spectral::{

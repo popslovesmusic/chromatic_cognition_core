@@ -28,6 +28,8 @@
 ## Latest Validation Updates
 - Phase 5A awareness buffer captures per-cycle coherence, entropy, spectral energy, and gradient RMS for deterministic replay.
 - AR(2) predictor delivers bounded two-step forecasts for coherence, entropy, and gradient energy with >0.8 Pearson correlation on synthetic validation traces.
+- Phase 5B dissonance scoring detects >90% of injected drifts with <5% false positives and logs cycle-level deltas to `logs/meta_dissonance.jsonl`.
+- Reflection planner now generates reversible mitigation plans (SeedFrom → PauseAug) once dissonance exceeds the configurable 0.25 threshold.
 - Training examples now populate the `TrainingConfig::retrieval_mode` field and use the current solver signature so `cargo test` builds all binaries without manual fixes.
 - The Phase 3B validation scenario performs class-aware dream mixing, captures Δloss feedback into the utility aggregator, and writes the synthesized bias profile to `logs/phase_3b_bias_profile.json`.
 - Dream module documentation snippets import `PoolConfig` from the correct module and avoid non-ASCII operators, keeping doctests green.

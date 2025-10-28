@@ -19,3 +19,12 @@ drift_threshold = 0.08
 [p5a]
 predict_horizon = 2
 features = ["coherence", "entropy", "grad_energy"]
+
+[p5b]
+dissonance_threshold = 0.25
+actions = ["SeedFrom", "DampLR", "CoolTint", "PauseAug"]
+
+[p5b.weights]
+coherence = 0.5
+entropy = 0.3
+energy = 0.2
