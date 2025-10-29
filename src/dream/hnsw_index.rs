@@ -8,6 +8,8 @@
 use crate::dream::error::{DreamError, DreamResult};
 use crate::dream::soft_index::{EntryId, Similarity};
 use hnsw_rs::prelude::*;
+use std::collections::HashMap;
+use uuid::Uuid;
 
 /// HNSW-based approximate nearest neighbor index
 ///
@@ -34,8 +36,10 @@ pub struct HnswIndex<'a> {
     hnsw_cosine: Option<Hnsw<'a, f32, DistCosine>>,
     /// HNSW index for Euclidean distance
     hnsw_euclidean: Option<Hnsw<'a, f32, DistL2>>,
-    /// Mapping from internal ID to EntryId
-    id_map: Vec<EntryId>,
+    /// Mapping from EntryId to internal numeric identifier
+    id_map: HashMap<Uuid, u32>,
+    /// Mapping from internal numeric identifier back to EntryId
+    id_slots: Vec<Option<EntryId>>,
     /// Pending embeddings waiting to be inserted during build()
     pending_embeddings: Vec<Vec<f32>>,
     /// Embedding dimension
@@ -63,7 +67,8 @@ impl<'a> HnswIndex<'a> {
         Self {
             hnsw_cosine: None,
             hnsw_euclidean: None,
-            id_map: Vec::with_capacity(capacity),
+            id_map: HashMap::with_capacity(capacity),
+            id_slots: Vec::with_capacity(capacity),
             pending_embeddings: Vec::with_capacity(capacity),
             dim,
             max_connections: 16,
@@ -91,7 +96,8 @@ impl<'a> HnswIndex<'a> {
         Self {
             hnsw_cosine: None,
             hnsw_euclidean: None,
-            id_map: Vec::with_capacity(capacity),
+            id_map: HashMap::with_capacity(capacity),
+            id_slots: Vec::with_capacity(capacity),
             pending_embeddings: Vec::with_capacity(capacity),
             dim,
             max_connections,
@@ -119,7 +125,9 @@ impl<'a> HnswIndex<'a> {
             ));
         }
 
-        self.id_map.push(id);
+        let internal_id = self.id_slots.len() as u32;
+        self.id_map.insert(id, internal_id);
+        self.id_slots.push(Some(id));
         self.pending_embeddings.push(embedding);
 
         Ok(())
@@ -136,7 +144,7 @@ impl<'a> HnswIndex<'a> {
     /// the entire index. A production implementation would support
     /// incremental updates.
     pub fn build(&mut self, mode: Similarity) -> DreamResult<()> {
-        if self.id_map.len() != self.pending_embeddings.len() {
+        if self.id_slots.len() != self.pending_embeddings.len() {
             return Err(DreamError::index_corrupted(
                 "HNSW build: id_map and pending embeddings length mismatch",
             ));
@@ -183,8 +191,8 @@ impl<'a> HnswIndex<'a> {
             }
         }
 
-        // Truncate id_map to actual number of entries in case build() is called after clear()
-        self.id_map.truncate(num_entries);
+        // Truncate slots to actual number of entries in case build() is called after clear()
+        self.id_slots.truncate(num_entries);
         self.pending_embeddings.clear();
 
         Ok(())
@@ -253,12 +261,17 @@ impl<'a> HnswIndex<'a> {
                 ));
             }
 
-            let entry_id = *self.id_map.get(internal_id).ok_or_else(|| {
-                DreamError::index_corrupted(format!(
-                    "HNSW search: missing id_map entry for internal id {}",
-                    internal_id
-                ))
-            })?;
+            let entry_id = self
+                .id_slots
+                .get(internal_id)
+                .copied()
+                .flatten()
+                .ok_or_else(|| {
+                    DreamError::index_corrupted(format!(
+                        "HNSW search: missing id_map entry for internal id {}",
+                        internal_id
+                    ))
+                })?;
 
             // Convert distance to similarity score, clamping to deterministic ranges
             let similarity = match mode {
@@ -290,6 +303,7 @@ impl<'a> HnswIndex<'a> {
         self.hnsw_cosine = None;
         self.hnsw_euclidean = None;
         self.id_map.clear();
+        self.id_slots.clear();
         self.pending_embeddings.clear();
     }
 
@@ -308,6 +322,30 @@ impl<'a> HnswIndex<'a> {
             ef_search: self.ef_search,
             built: self.hnsw_cosine.is_some() || self.hnsw_euclidean.is_some(),
         }
+    }
+
+    /// Get mutable access to the EntryId → internal ID map. Intended for
+    /// controlled lifecycle management via higher-level protocols.
+    pub fn get_mut_id_map(&mut self) -> &mut HashMap<Uuid, u32> {
+        &mut self.id_map
+    }
+
+    /// Clear a slot in the internal identifier table. This marks the
+    /// corresponding internal node as logically removed.
+    pub fn clear_internal_slot(&mut self, internal_id: u32) {
+        if let Some(slot) = self.id_slots.get_mut(internal_id as usize) {
+            *slot = None;
+        }
+    }
+
+    /// Query wrapper that mirrors the linear SoftIndex interface.
+    pub fn query(
+        &self,
+        query: &[f32],
+        k: usize,
+        mode: Similarity,
+    ) -> DreamResult<Vec<(EntryId, f32)>> {
+        self.search(query, k, mode)
     }
 }
 
@@ -473,7 +511,7 @@ mod tests {
         let mut index = HnswIndex::new(16, 4);
 
         // Force mismatch by tampering with pending embeddings
-        index.id_map.push(EntryId::new_v4());
+        index.id_slots.push(Some(EntryId::new_v4()));
         let result = index.build(Similarity::Cosine);
 
         assert!(result.is_err());
@@ -491,7 +529,9 @@ mod tests {
         index.build(Similarity::Cosine).unwrap();
 
         // Desynchronize id_map manually
-        index.id_map.pop();
+        if let Some(slot) = index.id_slots.get_mut(0) {
+            *slot = None;
+        }
 
         let query = &embeddings[0].1;
         let result = index.search(query, 3, Similarity::Cosine);

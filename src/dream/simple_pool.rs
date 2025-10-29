@@ -10,9 +10,9 @@ use crate::solver::SolverResult;
 use crate::dream::soft_index::{SoftIndex, EntryId, Similarity};
 use crate::dream::hnsw_index::HnswIndex;
 use crate::dream::embedding::{EmbeddingMapper, QuerySignature};
-use crate::dream::hybrid_scoring::{RetrievalWeights, rerank_hybrid};
+use crate::dream::hybrid_scoring::{rerank_hybrid, RetrievalWeights};
+use crate::dream::memory::{estimate_entry_size, MemoryBudget};
 use crate::dream::query_cache::QueryCache;
-use crate::dream::memory::{MemoryBudget, estimate_entry_size};
 use crate::spectral::{extract_spectral_features, SpectralFeatures, WindowFunction};
 use std::collections::{VecDeque, HashMap};
 use std::time::SystemTime;
@@ -199,6 +199,56 @@ impl SimpleDreamPool {
         }
     }
 
+    /// Evict up to `count` entries from the front of the pool while keeping all
+    /// auxiliary structures synchronized.
+    fn evict_n_entries(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+
+        let mut evicted_any = false;
+
+        for _ in 0..count {
+            let old_entry = match self.entries.pop_front() {
+                Some(entry) => entry,
+                None => break,
+            };
+
+            evicted_any = true;
+
+            if let Some(ref mut budget) = self.memory_budget {
+                let old_size = estimate_entry_size(&old_entry);
+                budget.remove_entry(old_size);
+            }
+
+            if let Some(old_id) = self.entry_ids.pop_front() {
+                self.id_to_entry.remove(&old_id);
+
+                if let Some(hnsw) = self.hnsw_index.as_mut() {
+                    tracing::warn!("mutating HNSW id_map (pre-remove) for {}", old_id);
+                    let removed_internal = {
+                        let map = hnsw.get_mut_id_map();
+                        map.remove(&old_id)
+                    };
+                    tracing::warn!(
+                        "mutating HNSW id_map (post-remove) for {} (removed={})",
+                        old_id,
+                        removed_internal.is_some()
+                    );
+
+                    if let Some(internal) = removed_internal {
+                        hnsw.clear_internal_slot(internal);
+                    }
+                }
+            }
+        }
+
+        if evicted_any {
+            self.soft_index = None;
+            self.hnsw_index = None;
+        }
+    }
+
     /// Add a dream entry if it meets the coherence threshold
     ///
     /// Returns true if the dream was added, false otherwise.
@@ -211,31 +261,53 @@ impl SimpleDreamPool {
         let entry = DreamEntry::new(tensor, result);
         let entry_size = estimate_entry_size(&entry);
 
-        // Check memory budget and evict if needed
-        if let Some(ref mut budget) = self.memory_budget {
-            while budget.needs_eviction() && !self.entries.is_empty() {
-                // Evict oldest entry
-                if let Some(old_entry) = self.entries.pop_front() {
-                    let old_size = estimate_entry_size(&old_entry);
-                    budget.remove_entry(old_size);
+        // Determine required evictions based on memory budget heuristics.
+        let initial_evictions = if let Some(budget) = self.memory_budget.as_ref() {
+            let needs_space = !budget.can_add(entry_size) || budget.needs_eviction();
+            if needs_space {
+                let avg_entry_size = if budget.entry_count() > 0 {
+                    budget.average_entry_size()
+                } else {
+                    entry_size
+                };
+
+                let mut eviction_count = budget.calculate_eviction_count(avg_entry_size);
+
+                if !budget.can_add(entry_size) && avg_entry_size > 0 {
+                    let additional = (entry_size + avg_entry_size - 1) / avg_entry_size;
+                    eviction_count = eviction_count.max(additional);
                 }
-                if let Some(old_id) = self.entry_ids.pop_front() {
-                    self.id_to_entry.remove(&old_id);
-                }
+
+                if eviction_count == 0 { 1 } else { eviction_count }
+            } else {
+                0
             }
+        } else {
+            0
+        };
+
+        if initial_evictions > 0 {
+            self.evict_n_entries(initial_evictions);
         }
 
-        // Remove oldest entry if at capacity (count-based limit)
-        if self.entries.len() >= self.config.max_size {
-            if let Some(old_entry) = self.entries.pop_front() {
-                if let Some(ref mut budget) = self.memory_budget {
-                    let old_size = estimate_entry_size(&old_entry);
-                    budget.remove_entry(old_size);
-                }
+        while {
+            if let Some(budget) = self.memory_budget.as_ref() {
+                !budget.can_add(entry_size)
+            } else {
+                false
             }
-            if let Some(old_id) = self.entry_ids.pop_front() {
-                self.id_to_entry.remove(&old_id);
-            }
+        } && !self.entries.is_empty()
+        {
+            self.evict_n_entries(1);
+        }
+
+        let overflow = self
+            .entries
+            .len()
+            .saturating_add(1)
+            .saturating_sub(self.config.max_size);
+        if overflow > 0 {
+            self.evict_n_entries(overflow);
         }
 
         // Add new entry
@@ -771,12 +843,28 @@ impl SimpleDreamPool {
         // Get initial k-NN from either HNSW or SoftIndex
         let hits = if let Some(hnsw) = &self.hnsw_index {
             // Use HNSW for O(log n) search
-            hnsw.search(&query_embedding, k, mode)
-                .unwrap_or_else(|_| Vec::new())
+            match hnsw.query(&query_embedding, k, mode) {
+                Ok(results) => results,
+                Err(err) => {
+                    tracing::warn!(
+                        "HNSW retrieval failed; returning empty result set: {}",
+                        err
+                    );
+                    Vec::new()
+                }
+            }
         } else if let Some(index) = &self.soft_index {
             // Fall back to linear SoftIndex
-            index.query(&query_embedding, k, mode)
-                .unwrap_or_else(|_| Vec::new())
+            match index.query(&query_embedding, k, mode) {
+                Ok(results) => results,
+                Err(err) => {
+                    tracing::warn!(
+                        "Soft index retrieval failed; returning empty result set: {}",
+                        err
+                    );
+                    Vec::new()
+                }
+            }
         } else {
             // No index built yet
             return Vec::new();
