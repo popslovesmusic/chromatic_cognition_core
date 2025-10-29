@@ -26,6 +26,9 @@
 - Visualization uses Plotters' bitmap backend for dependency-light rendering.
 
 ## Latest Validation Updates
+- Bridge configuration loader reads deterministic Phase 7A parameters from
+  `config/bridge.toml`, validating FFT size, categorical count, and ΔE guard-rails
+  before exposing them to the spectral bridge (`src/config.rs`).
 - CIE ΔE94 color-difference check enforces the ≤1e-3 reversibility threshold with deterministic D65/2° conversions (`src/spectral/color.rs`).
 - Appendix A hue bridge converts ChromaticTensor samples into SpectralTensor frequency
   channels with canonical hue wrapping, circular interpolation, and seam blending that

@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Spectral bridge adds deterministic hue normalization, seam blending, and reversible
   ChromaticTensor ↔ SpectralTensor conversion with frequency storage.
 
+### Added - Bridge Configuration Loader
+- Introduced `BridgeConfig` parser for deterministic hue ↔ frequency parameters,
+  including spectral accumulation and reversibility guard-rails (`src/config.rs`).
+- Documented `config/bridge.toml` usage alongside engine configuration in the README.
+
 ### Added - Native Rust Solver
 
 ### Added - Phase 5A Awareness & Prediction

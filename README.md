@@ -137,10 +137,32 @@ features = ["coherence", "entropy", "grad_energy"]
 Load configuration in your code:
 
 ```rust
-use chromatic_cognition_core::EngineConfig;
+use chromatic_cognition_core::{BridgeConfig, EngineConfig};
 
 let config = EngineConfig::load_from_file("config/engine.toml")?;
 let tensor = ChromaticTensor::from_seed(config.seed, config.rows, config.cols, config.layers);
+
+let bridge = BridgeConfig::load_from_file("config/bridge.toml")?;
+println!("Bridge octaves: {}", bridge.base.octaves);
+```
+
+Hue ↔ frequency bridge parameters live in `config/bridge.toml`:
+
+```toml
+[bridge]
+f_min = 110.0
+octaves = 7
+gamma = 1.0
+sample_rate = 44100
+
+[bridge.spectral]
+fft_size = 4096
+accum_format = "Q16.48"
+reduction_mode = "pairwise_neumaier"
+categorical_count = 12
+
+[bridge.reversibility]
+delta_e_tolerance = 0.001
 ```
 
 ### Logging
@@ -164,6 +186,7 @@ Training iterations log to `logs/run.jsonl`:
 ```
 chromatic_cognition_core/
 ├── config/
+│   ├── bridge.toml          # Spectral bridge configuration
 │   └── engine.toml          # Engine configuration
 ├── examples/
 │   └── demo.rs              # Demo application

@@ -43,7 +43,9 @@ pub mod spectral;
 pub mod tensor;
 pub mod training;
 
-pub use config::{EngineConfig, Phase5AConfig, Phase5BConfig, Phase5CConfig, Phase6BConfig};
+pub use config::{
+    BridgeConfig, EngineConfig, Phase5AConfig, Phase5BConfig, Phase5CConfig, Phase6BConfig,
+};
 pub use dream::{BiasProfile, ChromaBias, ClassBias, SimpleDreamPool, SpectralBias};
 pub use learner::feedback::{ClassUtilityStats, FeedbackRecord, UtilityAggregator};
 pub use learner::training::{train_baseline, train_with_dreams, TrainingConfig, TrainingResult};

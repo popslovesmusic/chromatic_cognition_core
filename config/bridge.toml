@@ -1,0 +1,38 @@
+# Deterministic Configuration for the Chromatic-Sonic Bridge (Phase 7A).
+# All values are fixed and auditable to ensure bit-stable, reproducible
+# encoding and decoding across platforms.
+
+[bridge]
+# Base frequency parameters for the Hue -> Pitch mapping formula:
+# f = f_min * 2^(H / (2*pi) * octaves)
+f_min = 110.0           # Base frequency: A2 (110 Hz).
+octaves = 7             # Total range: A2 to ~14 kHz.
+gamma = 1.0             # Saturation -> Amplitude power law exponent (A = S^gamma).
+sample_rate = 44100     # Standard sample rate for audio generation.
+
+[bridge.spectral]
+# Fixed-Point Accumulation and FFT parameters for the SpectralTensor.
+# These ensure deterministic summation and energy balance (Delta < 0.5 dB).
+
+# The number of bins in the SpectralTensor for FFT/correlation.
+fft_size = 4096
+
+# The precise fixed-point format for bin accumulation.
+# Q16.48 (64-bit with 48 fractional bits) is used for maximum precision.
+accum_format = "Q16.48"
+
+# The method used to combine spectral results from parallel threads/tiles.
+# Neumaier Compensated Summation in a fixed-order tree guarantees bit-stability.
+reduction_mode = "pairwise_neumaier"
+
+# Total number of discrete Timbre Profiles for the Sonic Alphabet.
+# 12 categories align the color wheel with the chromatic musical scale.
+categorical_count = 12
+
+[bridge.reversibility]
+# Parameters for auditing the ChromaticTensor round-trip accuracy.
+# NOTE: The sRGB-to-CIELAB conversion parameters (D65/2deg) are internal.
+
+# The maximum acceptable difference (Delta E) between the original color
+# and the color recovered from the UMS vector.
+delta_e_tolerance = 0.001000  # Strict guardrail: Delta E <= 1.0e-3

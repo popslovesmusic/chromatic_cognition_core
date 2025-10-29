@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use toml::Value;
 
 use crate::meta::dissonance::DissonanceWeights;
@@ -119,6 +119,221 @@ impl Default for EngineConfig {
             device: "cpu".to_string(),
         }
     }
+}
+
+/// Bridge configuration describing the chromatic ↔ sonic mapping parameters.
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeConfig {
+    /// Base hue → frequency mapping parameters.
+    pub base: BridgeBaseConfig,
+    /// Spectral accumulation and reduction settings.
+    pub spectral: BridgeSpectralConfig,
+    /// Reversibility guard-rail thresholds.
+    pub reversibility: BridgeReversibilityConfig,
+}
+
+impl BridgeConfig {
+    /// Load bridge configuration from a TOML file.
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(path)?;
+        Self::from_str(&contents)
+    }
+
+    /// Parse bridge configuration from a TOML string.
+    pub fn from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        let raw: RawBridgeConfig =
+            toml::from_str(toml_str).map_err(|err| ConfigError::Parse(err.to_string()))?;
+
+        let base = BridgeBaseConfig::try_from(&raw.bridge)?;
+        let spectral = BridgeSpectralConfig::try_from(&raw.bridge.spectral)?;
+        let reversibility = BridgeReversibilityConfig::try_from(&raw.bridge.reversibility)?;
+
+        Ok(Self {
+            base,
+            spectral,
+            reversibility,
+        })
+    }
+}
+
+/// Base hue → frequency configuration parameters.
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeBaseConfig {
+    pub f_min: f32,
+    pub octaves: f32,
+    pub gamma: f32,
+    pub sample_rate: u32,
+}
+
+impl BridgeBaseConfig {
+    fn try_from(raw: &RawBridgeBase) -> Result<Self, ConfigError> {
+        if !raw.f_min.is_finite() || raw.f_min <= 0.0 {
+            return Err(ConfigError::Parse("bridge.f_min must be positive".into()));
+        }
+        if !raw.octaves.is_finite() || raw.octaves <= 0.0 {
+            return Err(ConfigError::Parse("bridge.octaves must be positive".into()));
+        }
+        if !raw.gamma.is_finite() || raw.gamma <= 0.0 {
+            return Err(ConfigError::Parse("bridge.gamma must be positive".into()));
+        }
+        if raw.sample_rate == 0 {
+            return Err(ConfigError::Parse(
+                "bridge.sample_rate must be non-zero".into(),
+            ));
+        }
+
+        Ok(Self {
+            f_min: raw.f_min,
+            octaves: raw.octaves,
+            gamma: raw.gamma,
+            sample_rate: raw.sample_rate,
+        })
+    }
+}
+
+/// Spectral accumulation configuration parameters.
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeSpectralConfig {
+    pub fft_size: usize,
+    pub accum_format: String,
+    pub reduction_mode: String,
+    pub categorical_count: usize,
+}
+
+impl BridgeSpectralConfig {
+    fn try_from(raw: &RawBridgeSpectral) -> Result<Self, ConfigError> {
+        if raw.fft_size < 2 {
+            return Err(ConfigError::Parse(
+                "bridge.spectral.fft_size must be ≥ 2".into(),
+            ));
+        }
+        if raw.categorical_count == 0 {
+            return Err(ConfigError::Parse(
+                "bridge.spectral.categorical_count must be ≥ 1".into(),
+            ));
+        }
+
+        Ok(Self {
+            fft_size: raw.fft_size,
+            accum_format: raw.accum_format.clone(),
+            reduction_mode: raw.reduction_mode.clone(),
+            categorical_count: raw.categorical_count,
+        })
+    }
+}
+
+/// Reversibility guard-rail configuration.
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeReversibilityConfig {
+    pub delta_e_tolerance: f32,
+}
+
+impl BridgeReversibilityConfig {
+    fn try_from(raw: &RawBridgeReversibility) -> Result<Self, ConfigError> {
+        if !raw.delta_e_tolerance.is_finite() || raw.delta_e_tolerance < 0.0 {
+            return Err(ConfigError::Parse(
+                "bridge.reversibility.delta_e_tolerance must be ≥ 0".into(),
+            ));
+        }
+
+        Ok(Self {
+            delta_e_tolerance: raw.delta_e_tolerance,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBridgeConfig {
+    bridge: RawBridgeBase,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBridgeBase {
+    #[serde(default = "default_f_min")]
+    f_min: f32,
+    #[serde(default = "default_octaves")]
+    octaves: f32,
+    #[serde(default = "default_gamma")]
+    gamma: f32,
+    #[serde(default = "default_sample_rate")]
+    sample_rate: u32,
+    #[serde(default)]
+    spectral: RawBridgeSpectral,
+    #[serde(default)]
+    reversibility: RawBridgeReversibility,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBridgeSpectral {
+    #[serde(default = "default_fft_size")]
+    fft_size: usize,
+    #[serde(default = "default_accum_format")]
+    accum_format: String,
+    #[serde(default = "default_reduction_mode")]
+    reduction_mode: String,
+    #[serde(default = "default_categorical_count")]
+    categorical_count: usize,
+}
+
+impl Default for RawBridgeSpectral {
+    fn default() -> Self {
+        Self {
+            fft_size: default_fft_size(),
+            accum_format: default_accum_format(),
+            reduction_mode: default_reduction_mode(),
+            categorical_count: default_categorical_count(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBridgeReversibility {
+    #[serde(default = "default_delta_e_tolerance")]
+    delta_e_tolerance: f32,
+}
+
+impl Default for RawBridgeReversibility {
+    fn default() -> Self {
+        Self {
+            delta_e_tolerance: default_delta_e_tolerance(),
+        }
+    }
+}
+
+fn default_f_min() -> f32 {
+    110.0
+}
+
+fn default_octaves() -> f32 {
+    6.0
+}
+
+fn default_gamma() -> f32 {
+    1.0
+}
+
+fn default_sample_rate() -> u32 {
+    44_100
+}
+
+fn default_fft_size() -> usize {
+    1024
+}
+
+fn default_accum_format() -> String {
+    "Q16.48".to_string()
+}
+
+fn default_reduction_mode() -> String {
+    "pairwise_neumaier".to_string()
+}
+
+fn default_categorical_count() -> usize {
+    12
+}
+
+fn default_delta_e_tolerance() -> f32 {
+    1.0e-3
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -761,5 +976,42 @@ mod tests {
         assert!((config.risk_weight.entropy - 0.4).abs() < f32::EPSILON);
         assert!((config.risk_weight.coherence - 0.2).abs() < f32::EPSILON);
         assert!((config.risk_weight.oscillation - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn bridge_config_parses_full_spec() {
+        let toml = r#"
+[bridge]
+f_min = 110.0
+octaves = 7
+gamma = 1.0
+sample_rate = 44100
+
+[bridge.spectral]
+fft_size = 4096
+accum_format = "Q16.48"
+reduction_mode = "pairwise_neumaier"
+categorical_count = 12
+
+[bridge.reversibility]
+delta_e_tolerance = 0.001
+"#;
+        let config = BridgeConfig::from_str(toml).unwrap();
+        assert!((config.base.f_min - 110.0).abs() < f32::EPSILON);
+        assert_eq!(config.base.sample_rate, 44_100);
+        assert_eq!(config.spectral.fft_size, 4096);
+        assert_eq!(config.spectral.accum_format, "Q16.48");
+        assert_eq!(config.reversibility.delta_e_tolerance, 0.001);
+    }
+
+    #[test]
+    fn bridge_config_rejects_invalid_fft_size() {
+        let toml = r#"
+[bridge]
+[bridge.spectral]
+fft_size = 1
+"#;
+        let result = BridgeConfig::from_str(toml);
+        assert!(result.is_err());
     }
 }
