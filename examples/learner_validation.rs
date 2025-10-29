@@ -48,6 +48,8 @@ fn main() {
         max_size: 500,
         coherence_threshold: 0.7,
         retrieval_limit: 3,
+        use_hnsw: true,
+        memory_budget_mb: Some(500),
     };
 
     println!("Configuration:");

@@ -67,6 +67,8 @@ fn execute_harness(seed: u64) -> HarnessRun {
         max_size: POOL_MAX_SIZE,
         coherence_threshold: COHERENCE_THRESHOLD,
         retrieval_limit: RETRIEVAL_LIMIT,
+        use_hnsw: true,
+        memory_budget_mb: Some(500),
     };
 
     let mut control_pool = SimpleDreamPool::new(pool_config.clone());

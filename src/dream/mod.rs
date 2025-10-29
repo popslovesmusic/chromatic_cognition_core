@@ -38,12 +38,19 @@ pub mod analysis;
 pub mod bias;
 pub mod diversity;
 pub mod embedding;
+pub mod error;
 pub mod experiment;
+pub mod hnsw_index;
 pub mod hybrid_scoring;
+pub mod memory;
 pub mod prelude;
+pub mod query_cache;
 pub mod retrieval_mode;
 pub mod simple_pool;
 pub mod soft_index;
+
+#[cfg(test)]
+mod tests;
 
 // === Tier 1: Core API (Recommended re-exports) ===
 
@@ -78,6 +85,9 @@ pub use soft_index::{EntryId, Similarity, SoftIndex};
 
 /// Phase 3B: Experiment harness
 pub use experiment::ExperimentHarness;
+
+/// Error types for dream operations
+pub use error::{DreamError, DreamResult};
 
 // === Tier 3: Advanced API (Import from submodules when needed) ===
 // - use dream::hybrid_scoring::rerank_hybrid;

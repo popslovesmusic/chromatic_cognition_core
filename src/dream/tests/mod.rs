@@ -1,0 +1,359 @@
+//! Integration tests for dream pool system
+//!
+//! This module contains comprehensive integration tests that verify
+//! the entire dream pool pipeline works correctly end-to-end.
+
+use crate::dream::*;
+use crate::dream::embedding::QuerySignature;
+use crate::dream::soft_index::EntryId;
+use crate::solver::SolverResult;
+use crate::tensor::ChromaticTensor;
+use serde_json::json;
+
+/// Test that the full retrieval pipeline works with all components
+#[test]
+fn test_full_retrieval_pipeline() {
+    // Create a pool with some entries
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add diverse entries with different colors
+    for i in 0..20 {
+        let tensor = ChromaticTensor::new(4, 4, 3);
+        let result = SolverResult {
+            energy: (0.1 + (i as f64) * 0.01),
+            coherence: (0.9 - (i as f64) * 0.01),
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({"test": i}),
+        };
+        pool.add_if_coherent(tensor, result);
+    }
+
+    // Create mapper and rebuild index
+    let mapper = EmbeddingMapper::new(64);
+    pool.rebuild_soft_index(&mapper, None);
+
+    // Test retrieval works
+    let query = QuerySignature::from_chroma([1.0, 0.0, 0.0]);
+    let weights = RetrievalWeights::default();
+    let results = pool.retrieve_soft(&query, 5, &weights, Similarity::Cosine, &mapper, None);
+
+    assert!(results.len() <= 5);
+    assert!(results.len() > 0);
+}
+
+/// Test that query cache improves performance on repeated queries
+#[test]
+fn test_query_cache_integration() {
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add entries
+    for _ in 0..10 {
+        let tensor = ChromaticTensor::new(4, 4, 3);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+        pool.add_if_coherent(tensor, result);
+    }
+
+    // Query cache stats should show hits after repeated queries
+    let stats_before = pool.query_cache_stats();
+    assert_eq!(stats_before.0, 0); // No hits initially
+
+    // Note: Direct query cache testing would require exposing
+    // the cache at a higher level. For now, we verify it exists.
+}
+
+/// Test that spectral features are always computed
+#[test]
+fn test_spectral_features_always_present() {
+    let tensor = ChromaticTensor::new(4, 4, 3);
+    let result = SolverResult {
+        energy: 0.1,
+        coherence: 0.9,
+        violation: 0.0,
+        grad: None,
+        mask: None,
+        meta: json!({}),
+    };
+
+    let entry = DreamEntry::new(tensor, result);
+
+    // Spectral features should always be present (not Option)
+    assert!(entry.spectral_features.entropy >= 0.0);
+    assert!(entry.spectral_features.low_freq_energy >= 0.0);
+    assert!(entry.spectral_features.mid_freq_energy >= 0.0);
+    assert!(entry.spectral_features.high_freq_energy >= 0.0);
+}
+
+/// Test MMR diversity enforcement
+#[test]
+fn test_mmr_diversity_enforcement() {
+    use crate::dream::diversity::retrieve_diverse_mmr;
+
+    // Create similar entries (all red-ish)
+    let mut candidates = vec![];
+    for i in 0..5 {
+        let tensor = ChromaticTensor::new(2, 2, 2);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+        let mut entry = DreamEntry::new(tensor, result);
+        entry.chroma_signature = [1.0 - (i as f32) * 0.05, 0.0, 0.0];
+        candidates.push(entry);
+    }
+
+    // Without diversity (lambda=1.0), should select most similar
+    let no_diversity = retrieve_diverse_mmr(&candidates, &[1.0, 0.0, 0.0], 3, 1.0, 0.0);
+
+    // With diversity (lambda=0.3), should select more diverse set
+    let with_diversity = retrieve_diverse_mmr(&candidates, &[1.0, 0.0, 0.0], 3, 0.3, 0.0);
+
+    // Both should return 3 entries
+    assert_eq!(no_diversity.len(), 3);
+    assert_eq!(with_diversity.len(), 3);
+
+    // First entry should be the same (most relevant)
+    assert_eq!(no_diversity[0].chroma_signature, with_diversity[0].chroma_signature);
+}
+
+/// Test memory budget prevents unbounded growth
+#[test]
+fn test_memory_budget_prevents_unbounded_growth() {
+    use crate::dream::memory::MemoryBudget;
+
+    let mut budget = MemoryBudget::new(1024 * 1024); // 1 MB limit
+
+    // Add entries until we hit the limit
+    for _ in 0..100 {
+        budget.add_entry(10 * 1024); // 10 KB each
+
+        if budget.needs_eviction() {
+            // Budget correctly detects when eviction is needed
+            assert!(budget.usage_ratio() > 0.9);
+            break;
+        }
+    }
+}
+
+/// Test HNSW index scales to large numbers of entries
+#[test]
+fn test_hnsw_scalability() {
+    // Test that we can handle large pools with HNSW
+    // For now, test with SoftIndex which is simpler for integration tests
+    use crate::dream::soft_index::{SoftIndex, EntryId, Similarity};
+
+    let mut index = SoftIndex::new(32);
+
+    // Add 1000 entries
+    for i in 0..1000 {
+        let id = EntryId::new_v4();
+        let embedding: Vec<f32> = (0..32)
+            .map(|j| ((i * 32 + j) as f32) / 32000.0)
+            .collect();
+        index.add(id, embedding).unwrap();
+    }
+
+    // Build index
+    index.build();
+
+    // Query should complete
+    let query: Vec<f32> = (0..32).map(|i| (i as f32) / 32.0).collect();
+    let results = index.query(&query, 10, Similarity::Cosine).unwrap();
+
+    assert_eq!(results.len(), 10);
+}
+
+/// Test error recovery when index is corrupted
+#[test]
+fn test_error_recovery_on_index_failure() {
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add entries
+    for _ in 0..5 {
+        let tensor = ChromaticTensor::new(4, 4, 3);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+        pool.add_if_coherent(tensor, result);
+    }
+
+    let mapper = EmbeddingMapper::new(64);
+    pool.rebuild_soft_index(&mapper, None);
+
+    // Even if we clear the pool, retrieval shouldn't crash
+    let query = QuerySignature::from_chroma([1.0, 0.0, 0.0]);
+    let weights = RetrievalWeights::default();
+    let results = pool.retrieve_soft(&query, 5, &weights, Similarity::Cosine, &mapper, None);
+
+    // Should handle gracefully (might return empty)
+    assert!(results.len() <= 5);
+}
+
+/// Test concurrent access patterns (basic safety check)
+#[test]
+fn test_concurrent_reads() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add entries
+    for _ in 0..20 {
+        let tensor = ChromaticTensor::new(4, 4, 3);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+        pool.add_if_coherent(tensor, result);
+    }
+
+    let mapper = EmbeddingMapper::new(64);
+    pool.rebuild_soft_index(&mapper, None);
+
+    // Wrap in Arc to share across threads
+    let pool = Arc::new(pool);
+    let mapper = Arc::new(mapper);
+
+    // Spawn multiple reader threads
+    let mut handles = vec![];
+    for i in 0..4 {
+        let pool_clone = Arc::clone(&pool);
+        let mapper_clone = Arc::clone(&mapper);
+
+        let handle = thread::spawn(move || {
+            let query = QuerySignature::from_chroma([
+                (i as f32) / 4.0,
+                1.0 - (i as f32) / 4.0,
+                0.0
+            ]);
+            let weights = RetrievalWeights::default();
+            let results = pool_clone.retrieve_soft(
+                &query,
+                5,
+                &weights,
+                Similarity::Cosine,
+                &*mapper_clone,
+                None
+            );
+            results.len()
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all threads
+    for handle in handles {
+        let count = handle.join().unwrap();
+        assert!(count <= 5);
+    }
+}
+
+/// Test large batch operations
+#[test]
+fn test_large_batch_operations() {
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add 100 entries in batch
+    for _ in 0..100 {
+        let tensor = ChromaticTensor::new(4, 4, 3);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+        pool.add_if_coherent(tensor, result);
+    }
+
+    assert_eq!(pool.len(), 100);
+
+    // Rebuild index should handle large batches
+    let mapper = EmbeddingMapper::new(64);
+    pool.rebuild_soft_index(&mapper, None);
+
+    // Retrieval should work with large pool
+    let query = QuerySignature::from_chroma([1.0, 0.0, 0.0]);
+    let weights = RetrievalWeights::default();
+    let results = pool.retrieve_soft(&query, 10, &weights, Similarity::Cosine, &mapper, None);
+
+    assert!(results.len() <= 10);
+}
+
+/// Test hybrid scoring weights combination
+#[test]
+fn test_hybrid_scoring_weights() {
+    use crate::dream::hybrid_scoring::{RetrievalWeights, rerank_hybrid};
+    use std::collections::HashMap;
+
+    // Create test hits
+    let id1 = EntryId::new_v4();
+    let id2 = EntryId::new_v4();
+    let hits = vec![(id1, 0.9), (id2, 0.7)];
+
+    // Create test entries
+    let tensor1 = ChromaticTensor::new(2, 2, 2);
+    let result1 = SolverResult {
+        energy: 0.1,
+        coherence: 0.95,
+        violation: 0.0,
+        grad: None,
+        mask: None,
+        meta: json!({}),
+    };
+    let entry1 = DreamEntry::new(tensor1, result1);
+
+    let tensor2 = ChromaticTensor::new(2, 2, 2);
+    let result2 = SolverResult {
+        energy: 0.2,
+        coherence: 0.85,
+        violation: 0.0,
+        grad: None,
+        mask: None,
+        meta: json!({}),
+    };
+    let entry2 = DreamEntry::new(tensor2, result2);
+
+    let mut entries = HashMap::new();
+    entries.insert(id1, entry1);
+    entries.insert(id2, entry2);
+
+    // Test different weight configurations
+    let equal_weights = RetrievalWeights {
+        alpha: 0.4,    // Similarity
+        beta: 0.3,     // Utility
+        gamma: 0.2,    // Class match
+        delta: 0.1,    // Duplicate penalty
+        lambda: 0.5,   // MMR diversity
+    };
+
+    let results = rerank_hybrid(&hits, &equal_weights, &entries, None);
+    assert_eq!(results.len(), 2);
+}

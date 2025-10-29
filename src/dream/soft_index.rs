@@ -2,6 +2,8 @@
 //!
 //! In-memory ANN-lite supporting cosine and euclidean similarity.
 
+use crate::dream::error::{DreamError, DreamResult};
+
 /// Unique identifier for indexed entries
 pub type EntryId = uuid::Uuid;
 
@@ -41,12 +43,23 @@ impl SoftIndex {
     }
 
     /// Add an entry to the index
-    pub fn add(&mut self, id: EntryId, vec: Vec<f32>) {
-        assert_eq!(vec.len(), self.dim, "Vector dimension mismatch");
+    ///
+    /// # Errors
+    ///
+    /// Returns `DimensionMismatch` if vector dimension doesn't match index dimension
+    pub fn add(&mut self, id: EntryId, vec: Vec<f32>) -> DreamResult<()> {
+        if vec.len() != self.dim {
+            return Err(DreamError::dimension_mismatch(
+                self.dim,
+                vec.len(),
+                "SoftIndex add"
+            ));
+        }
 
         self.ids.push(id);
         self.vecs.push(vec);
         self.norms.push(0.0); // Will be computed in build()
+        Ok(())
     }
 
     /// Build the index (compute norms)
@@ -55,11 +68,21 @@ impl SoftIndex {
     }
 
     /// Query for K nearest neighbors
-    pub fn query(&self, query: &[f32], k: usize, mode: Similarity) -> Vec<(EntryId, f32)> {
-        assert_eq!(query.len(), self.dim, "Query dimension mismatch");
+    ///
+    /// # Errors
+    ///
+    /// Returns `DimensionMismatch` if query dimension doesn't match index dimension
+    pub fn query(&self, query: &[f32], k: usize, mode: Similarity) -> DreamResult<Vec<(EntryId, f32)>> {
+        if query.len() != self.dim {
+            return Err(DreamError::dimension_mismatch(
+                self.dim,
+                query.len(),
+                "SoftIndex query"
+            ));
+        }
 
         if self.ids.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Compute similarities
@@ -80,11 +103,11 @@ impl SoftIndex {
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Return top-K
-        scores
+        Ok(scores
             .into_iter()
             .take(k)
             .map(|(idx, score)| (self.ids[idx], score))
-            .collect()
+            .collect())
     }
 
     /// Get number of entries
@@ -151,16 +174,16 @@ mod tests {
         let id2 = EntryId::new_v4();
         let id3 = EntryId::new_v4();
 
-        index.add(id1, vec![1.0, 0.0, 0.0]);
-        index.add(id2, vec![0.0, 1.0, 0.0]);
-        index.add(id3, vec![0.0, 0.0, 1.0]);
+        index.add(id1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add(id2, vec![0.0, 1.0, 0.0]).unwrap();
+        index.add(id3, vec![0.0, 0.0, 1.0]).unwrap();
         index.build();
 
         assert_eq!(index.len(), 3);
 
         // Query with red vector
         let query = vec![1.0, 0.0, 0.0];
-        let results = index.query(&query, 2, Similarity::Cosine);
+        let results = index.query(&query, 2, Similarity::Cosine).unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, id1); // Most similar
@@ -174,12 +197,12 @@ mod tests {
         let id1 = EntryId::new_v4();
         let id2 = EntryId::new_v4();
 
-        index.add(id1, vec![1.0, 0.0, 0.0]);
-        index.add(id2, vec![0.5, 0.5, 0.0]);
+        index.add(id1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add(id2, vec![0.5, 0.5, 0.0]).unwrap();
         index.build();
 
         let query = vec![1.0, 0.0, 0.0];
-        let results = index.query(&query, 2, Similarity::Cosine);
+        let results = index.query(&query, 2, Similarity::Cosine).unwrap();
 
         assert_eq!(results[0].0, id1); // Exact match first
         assert!(results[0].1 > results[1].1); // Higher similarity
@@ -192,12 +215,12 @@ mod tests {
         let id1 = EntryId::new_v4();
         let id2 = EntryId::new_v4();
 
-        index.add(id1, vec![1.0, 0.0, 0.0]);
-        index.add(id2, vec![10.0, 0.0, 0.0]);
+        index.add(id1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add(id2, vec![10.0, 0.0, 0.0]).unwrap();
         index.build();
 
         let query = vec![1.5, 0.0, 0.0];
-        let results = index.query(&query, 2, Similarity::Euclidean);
+        let results = index.query(&query, 2, Similarity::Euclidean).unwrap();
 
         assert_eq!(results[0].0, id1); // Closer in Euclidean space
     }
@@ -213,7 +236,39 @@ mod tests {
     fn test_empty_query() {
         let index = SoftIndex::new(3);
         let query = vec![1.0, 0.0, 0.0];
-        let results = index.query(&query, 5, Similarity::Cosine);
+        let results = index.query(&query, 5, Similarity::Cosine).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_dimension_mismatch_add() {
+        let mut index = SoftIndex::new(3);
+        let id = EntryId::new_v4();
+
+        let result = index.add(id, vec![1.0, 0.0]); // Wrong dimension
+        assert!(result.is_err());
+        match result {
+            Err(DreamError::DimensionMismatch { expected, got, .. }) => {
+                assert_eq!(expected, 3);
+                assert_eq!(got, 2);
+            }
+            _ => panic!("Expected DimensionMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_dimension_mismatch_query() {
+        let index = SoftIndex::new(3);
+        let query = vec![1.0, 0.0]; // Wrong dimension
+
+        let result = index.query(&query, 5, Similarity::Cosine);
+        assert!(result.is_err());
+        match result {
+            Err(DreamError::DimensionMismatch { expected, got, .. }) => {
+                assert_eq!(expected, 3);
+                assert_eq!(got, 2);
+            }
+            _ => panic!("Expected DimensionMismatch error"),
+        }
     }
 }

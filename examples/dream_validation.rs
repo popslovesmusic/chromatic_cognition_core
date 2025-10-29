@@ -14,7 +14,7 @@
 
 use chromatic_cognition_core::data::DatasetConfig;
 use chromatic_cognition_core::dream::simple_pool::PoolConfig;
-use chromatic_cognition_core::dream::{ExperimentConfig, ExperimentHarness, SeedingStrategy};
+use chromatic_cognition_core::dream::experiment::{ExperimentConfig, ExperimentHarness, SeedingStrategy};
 use chromatic_cognition_core::ChromaticNativeSolver;
 use std::fs::File;
 use std::io::Write;
@@ -34,6 +34,8 @@ fn main() {
         max_size: 200,
         coherence_threshold: 0.7, // Only keep high-coherence dreams
         retrieval_limit: 3,
+        use_hnsw: true,
+        memory_budget_mb: Some(500),
     };
 
     let num_epochs = 30;

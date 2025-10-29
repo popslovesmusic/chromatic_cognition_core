@@ -239,6 +239,16 @@ mod tests {
             meta: serde_json::json!({}),
         };
 
+        // Create dummy spectral features for testing
+        let spectral_features = crate::spectral::SpectralFeatures {
+            entropy: 0.5,
+            dominant_frequencies: [0, 0, 0],
+            low_freq_energy: 0.33,
+            mid_freq_energy: 0.33,
+            high_freq_energy: 0.34,
+            mean_psd: 1.0,
+        };
+
         (id, DreamEntry {
             tensor,
             result,
@@ -247,7 +257,7 @@ mod tests {
             utility: Some(utility),
             timestamp: std::time::SystemTime::now(),
             usage_count: 0,
-            spectral_features: None,
+            spectral_features,
             embed: None,
             util_mean: utility,
         })

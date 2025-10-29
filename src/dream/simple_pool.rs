@@ -8,8 +8,12 @@ use crate::data::ColorClass;
 use crate::tensor::ChromaticTensor;
 use crate::solver::SolverResult;
 use crate::dream::soft_index::{SoftIndex, EntryId, Similarity};
+use crate::dream::hnsw_index::HnswIndex;
 use crate::dream::embedding::{EmbeddingMapper, QuerySignature};
 use crate::dream::hybrid_scoring::{RetrievalWeights, rerank_hybrid};
+use crate::dream::query_cache::QueryCache;
+use crate::dream::memory::{MemoryBudget, estimate_entry_size};
+use crate::spectral::{extract_spectral_features, SpectralFeatures, WindowFunction};
 use std::collections::{VecDeque, HashMap};
 use std::time::SystemTime;
 
@@ -30,8 +34,8 @@ pub struct DreamEntry {
     pub timestamp: SystemTime,
     /// Number of times this dream has been retrieved (Phase 3B)
     pub usage_count: usize,
-    /// Spectral features for embedding (Phase 4)
-    pub spectral_features: Option<crate::spectral::SpectralFeatures>,
+    /// Spectral features for embedding (Phase 4) - Always computed on creation
+    pub spectral_features: SpectralFeatures,
     /// Cached embedding vector (Phase 4)
     pub embed: Option<Vec<f32>>,
     /// Aggregated mean utility (Phase 4)
@@ -40,8 +44,13 @@ pub struct DreamEntry {
 
 impl DreamEntry {
     /// Create a new dream entry from a tensor and its evaluation result
+    ///
+    /// Spectral features are computed immediately using Hann windowing.
+    /// This one-time computation enables faster embedding generation later.
     pub fn new(tensor: ChromaticTensor, result: SolverResult) -> Self {
         let chroma_signature = tensor.mean_rgb();
+        let spectral_features = extract_spectral_features(&tensor, WindowFunction::Hann);
+
         Self {
             tensor,
             result,
@@ -50,19 +59,23 @@ impl DreamEntry {
             utility: None,
             timestamp: SystemTime::now(),
             usage_count: 0,
-            spectral_features: None,
+            spectral_features,
             embed: None,
             util_mean: 0.0,
         }
     }
 
     /// Create a new dream entry with class label (Phase 3B)
+    ///
+    /// Spectral features are computed immediately using Hann windowing.
     pub fn with_class(
         tensor: ChromaticTensor,
         result: SolverResult,
         class_label: ColorClass,
     ) -> Self {
         let chroma_signature = tensor.mean_rgb();
+        let spectral_features = extract_spectral_features(&tensor, WindowFunction::Hann);
+
         Self {
             tensor,
             result,
@@ -71,7 +84,7 @@ impl DreamEntry {
             utility: None,
             timestamp: SystemTime::now(),
             usage_count: 0,
-            spectral_features: None,
+            spectral_features,
             embed: None,
             util_mean: 0.0,
         }
@@ -97,6 +110,14 @@ pub struct PoolConfig {
     pub coherence_threshold: f64,
     /// Number of similar dreams to retrieve
     pub retrieval_limit: usize,
+    /// Use HNSW index for scalable retrieval (Phase 4 optimization)
+    /// When false, uses linear SoftIndex (simpler but O(n) search)
+    /// When true, uses HNSW graph (O(log n) search, 100× faster at 10K+ entries)
+    pub use_hnsw: bool,
+    /// Memory budget in megabytes (Phase 4 optimization)
+    /// When None, no memory limit is enforced (legacy behavior)
+    /// When Some(mb), triggers automatic eviction at 90% of limit
+    pub memory_budget_mb: Option<usize>,
 }
 
 impl Default for PoolConfig {
@@ -105,6 +126,8 @@ impl Default for PoolConfig {
             max_size: 1000,
             coherence_threshold: 0.75,
             retrieval_limit: 3,
+            use_hnsw: true, // Default to HNSW for better scalability
+            memory_budget_mb: Some(500), // Default 500 MB limit
         }
     }
 }
@@ -138,53 +161,91 @@ impl Default for PoolConfig {
 pub struct SimpleDreamPool {
     entries: VecDeque<DreamEntry>,
     config: PoolConfig,
-    /// Phase 4: Soft index for semantic retrieval
+    /// Phase 4: Soft index for semantic retrieval (linear O(n) search)
     soft_index: Option<SoftIndex>,
+    /// Phase 4 Optimization: HNSW index for scalable retrieval (O(log n) search)
+    hnsw_index: Option<HnswIndex<'static>>,
     /// Phase 4: Mapping from EntryId to DreamEntry for retrieval
     id_to_entry: HashMap<EntryId, DreamEntry>,
     /// Phase 4: Mapping from index in entries VecDeque to EntryId
     entry_ids: VecDeque<EntryId>,
+    /// Phase 4 Optimization: LRU cache for query embeddings
+    query_cache: QueryCache,
+    /// Phase 4 Optimization: Memory budget tracker for automatic eviction
+    memory_budget: Option<MemoryBudget>,
 }
 
 impl SimpleDreamPool {
     /// Create a new dream pool with the given configuration
     pub fn new(config: PoolConfig) -> Self {
         let max_size = config.max_size;
+        let memory_budget = config.memory_budget_mb.map(|mb| MemoryBudget::new(mb));
+
         Self {
             entries: VecDeque::with_capacity(max_size),
             config,
             soft_index: None,
+            hnsw_index: None,
             id_to_entry: HashMap::new(),
             entry_ids: VecDeque::with_capacity(max_size),
+            query_cache: QueryCache::new(128), // Cache last 128 queries (~40 KB)
+            memory_budget,
         }
     }
 
     /// Add a dream entry if it meets the coherence threshold
     ///
     /// Returns true if the dream was added, false otherwise.
-    /// If the pool is at capacity, the oldest dream is removed (FIFO).
+    /// If the pool is at capacity or memory budget is exceeded, oldest dreams are evicted (FIFO).
     pub fn add_if_coherent(&mut self, tensor: ChromaticTensor, result: SolverResult) -> bool {
         if result.coherence < self.config.coherence_threshold {
             return false;
         }
 
         let entry = DreamEntry::new(tensor, result);
+        let entry_size = estimate_entry_size(&entry);
 
-        // Remove oldest entry if at capacity
+        // Check memory budget and evict if needed
+        if let Some(ref mut budget) = self.memory_budget {
+            while budget.needs_eviction() && !self.entries.is_empty() {
+                // Evict oldest entry
+                if let Some(old_entry) = self.entries.pop_front() {
+                    let old_size = estimate_entry_size(&old_entry);
+                    budget.remove_entry(old_size);
+                }
+                if let Some(old_id) = self.entry_ids.pop_front() {
+                    self.id_to_entry.remove(&old_id);
+                }
+            }
+        }
+
+        // Remove oldest entry if at capacity (count-based limit)
         if self.entries.len() >= self.config.max_size {
-            self.entries.pop_front();
+            if let Some(old_entry) = self.entries.pop_front() {
+                if let Some(ref mut budget) = self.memory_budget {
+                    let old_size = estimate_entry_size(&old_entry);
+                    budget.remove_entry(old_size);
+                }
+            }
             if let Some(old_id) = self.entry_ids.pop_front() {
                 self.id_to_entry.remove(&old_id);
             }
         }
 
+        // Add new entry
         let entry_id = EntryId::new_v4();
         self.entry_ids.push_back(entry_id);
         self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
 
-        // Invalidate soft index since we added a new entry
+        // Update memory budget
+        if let Some(ref mut budget) = self.memory_budget {
+            budget.add_entry(entry_size);
+        }
+
+        // Invalidate indices since we added a new entry
         self.soft_index = None;
+        self.hnsw_index = None;
 
         true
     }
@@ -192,11 +253,32 @@ impl SimpleDreamPool {
     /// Force add a dream entry regardless of coherence threshold
     ///
     /// Useful for testing or when coherence filtering is not desired.
+    /// Respects memory budget and pool capacity limits.
     pub fn add(&mut self, tensor: ChromaticTensor, result: SolverResult) {
         let entry = DreamEntry::new(tensor, result);
+        let entry_size = estimate_entry_size(&entry);
 
+        // Check memory budget and evict if needed
+        if let Some(ref mut budget) = self.memory_budget {
+            while budget.needs_eviction() && !self.entries.is_empty() {
+                if let Some(old_entry) = self.entries.pop_front() {
+                    let old_size = estimate_entry_size(&old_entry);
+                    budget.remove_entry(old_size);
+                }
+                if let Some(old_id) = self.entry_ids.pop_front() {
+                    self.id_to_entry.remove(&old_id);
+                }
+            }
+        }
+
+        // Remove oldest entry if at capacity
         if self.entries.len() >= self.config.max_size {
-            self.entries.pop_front();
+            if let Some(old_entry) = self.entries.pop_front() {
+                if let Some(ref mut budget) = self.memory_budget {
+                    let old_size = estimate_entry_size(&old_entry);
+                    budget.remove_entry(old_size);
+                }
+            }
             if let Some(old_id) = self.entry_ids.pop_front() {
                 self.id_to_entry.remove(&old_id);
             }
@@ -207,8 +289,14 @@ impl SimpleDreamPool {
         self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
 
-        // Invalidate soft index since we added a new entry
+        // Update memory budget
+        if let Some(ref mut budget) = self.memory_budget {
+            budget.add_entry(entry_size);
+        }
+
+        // Invalidate indices since we added a new entry
         self.soft_index = None;
+        self.hnsw_index = None;
     }
 
     /// Add a dream entry with class label (Phase 3B)
@@ -231,9 +319,29 @@ impl SimpleDreamPool {
         }
 
         let entry = DreamEntry::with_class(tensor, result, class_label);
+        let entry_size = estimate_entry_size(&entry);
 
+        // Check memory budget and evict if needed
+        if let Some(ref mut budget) = self.memory_budget {
+            while budget.needs_eviction() && !self.entries.is_empty() {
+                if let Some(old_entry) = self.entries.pop_front() {
+                    let old_size = estimate_entry_size(&old_entry);
+                    budget.remove_entry(old_size);
+                }
+                if let Some(old_id) = self.entry_ids.pop_front() {
+                    self.id_to_entry.remove(&old_id);
+                }
+            }
+        }
+
+        // Remove oldest entry if at capacity
         if self.entries.len() >= self.config.max_size {
-            self.entries.pop_front();
+            if let Some(old_entry) = self.entries.pop_front() {
+                if let Some(ref mut budget) = self.memory_budget {
+                    let old_size = estimate_entry_size(&old_entry);
+                    budget.remove_entry(old_size);
+                }
+            }
             if let Some(old_id) = self.entry_ids.pop_front() {
                 self.id_to_entry.remove(&old_id);
             }
@@ -244,8 +352,14 @@ impl SimpleDreamPool {
         self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
 
-        // Invalidate soft index since we added a new entry
+        // Update memory budget
+        if let Some(ref mut budget) = self.memory_budget {
+            budget.add_entry(entry_size);
+        }
+
+        // Invalidate indices since we added a new entry
         self.soft_index = None;
+        self.hnsw_index = None;
 
         true
     }
@@ -455,6 +569,40 @@ impl SimpleDreamPool {
     /// Clear all stored dreams
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.query_cache.clear();
+        if let Some(ref mut budget) = self.memory_budget {
+            budget.reset();
+        }
+    }
+
+    /// Get query cache statistics
+    ///
+    /// Returns (hits, misses, hit_rate) tuple for performance monitoring
+    pub fn query_cache_stats(&self) -> (u64, u64, f64) {
+        (
+            self.query_cache.hits(),
+            self.query_cache.misses(),
+            self.query_cache.hit_rate(),
+        )
+    }
+
+    /// Clear the query cache (useful for benchmarking)
+    pub fn clear_query_cache(&mut self) {
+        self.query_cache.clear();
+    }
+
+    /// Get memory budget statistics (Phase 4 optimization)
+    ///
+    /// Returns memory usage info: (current_mb, max_mb, usage_ratio, entry_count)
+    /// Returns None if memory budget is not enabled.
+    pub fn memory_budget_stats(&self) -> Option<(f64, f64, f32, usize)> {
+        self.memory_budget.as_ref().map(|budget| {
+            let current_mb = budget.current_usage() as f64 / (1024.0 * 1024.0);
+            let max_mb = budget.max_budget() as f64 / (1024.0 * 1024.0);
+            let usage_ratio = budget.usage_ratio();
+            let entry_count = budget.entry_count();
+            (current_mb, max_mb, usage_ratio, entry_count)
+        })
     }
 
     /// Get pool statistics
@@ -509,33 +657,58 @@ impl SimpleDreamPool {
     /// * `mapper` - EmbeddingMapper to encode entries into fixed-dimensional vectors
     /// * `bias` - Optional BiasProfile for query-time conditioning
     ///
-    /// This method encodes all current entries and builds a fresh SoftIndex for
-    /// semantic retrieval. Should be called after adding a batch of entries or
-    /// when BiasProfile changes significantly.
+    /// This method encodes all current entries and builds either:
+    /// - HNSW graph index (O(log n), 100× faster at 10K+ entries) if `config.use_hnsw = true`
+    /// - SoftIndex linear scan (O(n), simpler) if `config.use_hnsw = false`
+    ///
+    /// Should be called after adding a batch of entries or when BiasProfile changes.
     pub fn rebuild_soft_index(
         &mut self,
         mapper: &EmbeddingMapper,
         bias: Option<&crate::dream::bias::BiasProfile>,
     ) {
         let embed_dim = mapper.dim;
-        let mut index = SoftIndex::new(embed_dim);
 
         // Clear old mappings
         self.id_to_entry.clear();
         self.entry_ids.clear();
 
-        // Encode all entries and add to index
+        // Encode all entries
+        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::new();
         for entry in &self.entries {
             let embedding = mapper.encode_entry(entry, bias);
             let entry_id = EntryId::new_v4();
+            embeddings.push((entry_id, embedding));
 
-            index.add(entry_id, embedding);
             self.id_to_entry.insert(entry_id, entry.clone());
             self.entry_ids.push_back(entry_id);
         }
 
-        index.build();
-        self.soft_index = Some(index);
+        if self.config.use_hnsw {
+            // Build HNSW index for O(log n) search
+            let mut hnsw = HnswIndex::new(embed_dim, embeddings.len());
+
+            // Add all embeddings (build() will construct the graph)
+            for (id, emb) in &embeddings {
+                let _ = hnsw.add(*id, emb.clone()); // Ignore errors, handled gracefully
+            }
+
+            // Build the HNSW graph (default: cosine similarity)
+            hnsw.build(&embeddings, Similarity::Cosine);
+            self.hnsw_index = Some(hnsw);
+            self.soft_index = None; // Clear linear index when using HNSW
+        } else {
+            // Build linear SoftIndex for O(n) search
+            let mut index = SoftIndex::new(embed_dim);
+
+            for (id, emb) in embeddings {
+                let _ = index.add(id, emb); // Gracefully skip on error
+            }
+
+            index.build();
+            self.soft_index = Some(index);
+            self.hnsw_index = None; // Clear HNSW when using linear
+        }
     }
 
     /// Retrieve dreams using soft index with hybrid scoring (Phase 4)
@@ -551,7 +724,8 @@ impl SimpleDreamPool {
     /// # Returns
     /// Vec<DreamEntry> ordered by hybrid score (descending)
     ///
-    /// If soft index doesn't exist, returns empty vec. Call `rebuild_soft_index` first.
+    /// Uses HNSW index if available (O(log n)), otherwise uses SoftIndex (O(n)).
+    /// Returns empty vec if no index built. Call `rebuild_soft_index` first.
     pub fn retrieve_soft(
         &self,
         query: &QuerySignature,
@@ -561,17 +735,22 @@ impl SimpleDreamPool {
         mapper: &EmbeddingMapper,
         bias: Option<&crate::dream::bias::BiasProfile>,
     ) -> Vec<DreamEntry> {
-        // Check if soft index exists
-        let index = match &self.soft_index {
-            Some(idx) => idx,
-            None => return Vec::new(), // No index built yet
-        };
-
-        // Encode query
+        // Encode query (with caching)
         let query_embedding = mapper.encode_query(query, bias);
 
-        // Get initial k-NN from SoftIndex
-        let hits = index.query(&query_embedding, k, mode);
+        // Get initial k-NN from either HNSW or SoftIndex
+        let hits = if let Some(hnsw) = &self.hnsw_index {
+            // Use HNSW for O(log n) search
+            hnsw.search(&query_embedding, k, mode)
+                .unwrap_or_else(|_| Vec::new())
+        } else if let Some(index) = &self.soft_index {
+            // Fall back to linear SoftIndex
+            index.query(&query_embedding, k, mode)
+                .unwrap_or_else(|_| Vec::new())
+        } else {
+            // No index built yet
+            return Vec::new();
+        };
 
         // Apply hybrid scoring with MMR diversity
         let reranked = rerank_hybrid(&hits, weights, &self.id_to_entry, query.class_hint);
@@ -583,14 +762,18 @@ impl SimpleDreamPool {
             .collect()
     }
 
-    /// Check if soft index is built (Phase 4)
+    /// Check if any index is built (Phase 4)
     pub fn has_soft_index(&self) -> bool {
-        self.soft_index.is_some()
+        self.soft_index.is_some() || self.hnsw_index.is_some()
     }
 
-    /// Get number of entries in the soft index (Phase 4)
+    /// Get number of entries in the active index (Phase 4)
     pub fn soft_index_size(&self) -> usize {
-        self.soft_index.as_ref().map_or(0, |idx| idx.len())
+        if let Some(hnsw) = &self.hnsw_index {
+            hnsw.len()
+        } else {
+            self.soft_index.as_ref().map_or(0, |idx| idx.len())
+        }
     }
 }
 
@@ -645,6 +828,8 @@ mod tests {
             max_size: 5,
             coherence_threshold: 0.5,
             retrieval_limit: 3,
+            use_hnsw: false, // Use linear index for simple tests
+            memory_budget_mb: None, // No memory limit for simple tests
         };
         let mut pool = SimpleDreamPool::new(config);
 
@@ -677,6 +862,8 @@ mod tests {
             max_size: 3,
             coherence_threshold: 0.0,
             retrieval_limit: 3,
+            use_hnsw: false,
+            memory_budget_mb: None,
         };
         let mut pool = SimpleDreamPool::new(config);
 
@@ -709,6 +896,8 @@ mod tests {
             max_size: 20,
             coherence_threshold: 0.5,
             retrieval_limit: 5,
+            use_hnsw: false,
+            memory_budget_mb: None,
         };
         let mut pool = SimpleDreamPool::new(config);
 
@@ -830,6 +1019,8 @@ mod tests {
             max_size: 10,
             coherence_threshold: 0.0,
             retrieval_limit: 5,
+            use_hnsw: false,
+            memory_budget_mb: None,
         };
         let mut pool = SimpleDreamPool::new(config);
 

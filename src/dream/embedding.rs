@@ -109,24 +109,20 @@ impl EmbeddingMapper {
         // 1. Chromatic signature (3 dims)
         features.extend_from_slice(&entry.chroma_signature);
 
-        // 2. Spectral features (6 dims)
+        // 2. Spectral features (6 dims) - Always present since Phase 4 optimization
         if self.include_spectral {
-            if let Some(ref spectral) = entry.spectral_features {
-                features.push(spectral.entropy);
-                features.push(spectral.low_freq_energy);
-                features.push(spectral.mid_freq_energy);
-                features.push(spectral.high_freq_energy);
-                features.push(spectral.mean_psd);
+            let spectral = &entry.spectral_features;
+            features.push(spectral.entropy);
+            features.push(spectral.low_freq_energy);
+            features.push(spectral.mid_freq_energy);
+            features.push(spectral.high_freq_energy);
+            features.push(spectral.mean_psd);
 
-                // Dominant frequency (averaged across RGB)
-                let dom_freq_mean = (spectral.dominant_frequencies[0] as f32
-                    + spectral.dominant_frequencies[1] as f32
-                    + spectral.dominant_frequencies[2] as f32) / 3.0;
-                features.push(dom_freq_mean);
-            } else {
-                // Missing spectral features - use zeros
-                features.extend_from_slice(&[0.0; 6]);
-            }
+            // Dominant frequency (averaged across RGB)
+            let dom_freq_mean = (spectral.dominant_frequencies[0] as f32
+                + spectral.dominant_frequencies[1] as f32
+                + spectral.dominant_frequencies[2] as f32) / 3.0;
+            features.push(dom_freq_mean);
         }
 
         // 3. Class one-hot (10 dims)
