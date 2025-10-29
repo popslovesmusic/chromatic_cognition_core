@@ -51,6 +51,11 @@
 - The Phase 3B validation scenario performs class-aware dream mixing, captures Δloss feedback into the utility aggregator, and writes the synthesized bias profile to `logs/phase_3b_bias_profile.json`.
 - Dream module documentation snippets import `PoolConfig` from the correct module and avoid non-ASCII operators, keeping doctests green.
 - Dream pool soft-index rebuild now logs HNSW insertion/build failures before reverting to the linear fallback, preserving actionable diagnostics and resetting the ANN memory multiplier to 1.0 when degradation is required.
+- SimpleDreamPool addition paths now share an `internal_add` helper that centralizes
+  memory-budget eviction heuristics and entry-id bookkeeping for the canonical
+  `[3×12×12×3]` processing unit.
+- HNSW eviction logging was trimmed from the hot path; rebuild instrumentation retains
+  detailed diagnostics while routine inserts run without repetitive warnings.
 - Regression suite: `cargo test` exercises 210 unit tests, 7 integration tests, and 27 doctests in ~72s on CPU-only hardware (cold build compile time: 3m27s).
 - Detailed execution log captured in `docs/TEST_REPORT.md` with suite durations and reproduction steps.
 - Phase 5C ethics filter clips unsafe learning-rate, tint, and augmentation directives, rolls back on violations, and journals every decision to `logs/meta.jsonl`.

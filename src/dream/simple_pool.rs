@@ -225,16 +225,10 @@ impl SimpleDreamPool {
                 self.id_to_entry.remove(&old_id);
 
                 if let Some(hnsw) = self.hnsw_index.as_mut() {
-                    tracing::warn!("mutating HNSW id_map (pre-remove) for {}", old_id);
                     let removed_internal = {
                         let map = hnsw.get_mut_id_map();
                         map.remove(&old_id)
                     };
-                    tracing::warn!(
-                        "mutating HNSW id_map (post-remove) for {} (removed={})",
-                        old_id,
-                        removed_internal.is_some()
-                    );
 
                     if let Some(internal) = removed_internal {
                         hnsw.clear_internal_slot(internal);
@@ -249,19 +243,7 @@ impl SimpleDreamPool {
         }
     }
 
-    /// Add a dream entry if it meets the coherence threshold
-    ///
-    /// Returns true if the dream was added, false otherwise.
-    /// If the pool is at capacity or memory budget is exceeded, oldest dreams are evicted (FIFO).
-    pub fn add_if_coherent(&mut self, tensor: ChromaticTensor, result: SolverResult) -> bool {
-        if result.coherence < self.config.coherence_threshold {
-            return false;
-        }
-
-        let entry = DreamEntry::new(tensor, result);
-        let entry_size = estimate_entry_size(&entry);
-
-        // Determine required evictions based on memory budget heuristics.
+    fn internal_add(&mut self, entry: DreamEntry, entry_size: usize) -> bool {
         let initial_evictions = if let Some(budget) = self.memory_budget.as_ref() {
             let needs_space = !budget.can_add(entry_size) || budget.needs_eviction();
             if needs_space {
@@ -310,22 +292,34 @@ impl SimpleDreamPool {
             self.evict_n_entries(overflow);
         }
 
-        // Add new entry
         let entry_id = EntryId::new_v4();
         self.entry_ids.push_back(entry_id);
         self.id_to_entry.insert(entry_id, entry.clone());
         self.entries.push_back(entry);
 
-        // Update memory budget
         if let Some(ref mut budget) = self.memory_budget {
             budget.add_entry(entry_size);
         }
 
-        // Invalidate indices since we added a new entry
         self.soft_index = None;
         self.hnsw_index = None;
 
         true
+    }
+
+    /// Add a dream entry if it meets the coherence threshold
+    ///
+    /// Returns true if the dream was added, false otherwise.
+    /// If the pool is at capacity or memory budget is exceeded, oldest dreams are evicted (FIFO).
+    pub fn add_if_coherent(&mut self, tensor: ChromaticTensor, result: SolverResult) -> bool {
+        if result.coherence < self.config.coherence_threshold {
+            return false;
+        }
+
+        let entry = DreamEntry::new(tensor, result);
+        let entry_size = estimate_entry_size(&entry);
+
+        self.internal_add(entry, entry_size)
     }
 
     /// Force add a dream entry regardless of coherence threshold
@@ -336,45 +330,7 @@ impl SimpleDreamPool {
         let entry = DreamEntry::new(tensor, result);
         let entry_size = estimate_entry_size(&entry);
 
-        // Check memory budget and evict if needed
-        if let Some(ref mut budget) = self.memory_budget {
-            while budget.needs_eviction() && !self.entries.is_empty() {
-                if let Some(old_entry) = self.entries.pop_front() {
-                    let old_size = estimate_entry_size(&old_entry);
-                    budget.remove_entry(old_size);
-                }
-                if let Some(old_id) = self.entry_ids.pop_front() {
-                    self.id_to_entry.remove(&old_id);
-                }
-            }
-        }
-
-        // Remove oldest entry if at capacity
-        if self.entries.len() >= self.config.max_size {
-            if let Some(old_entry) = self.entries.pop_front() {
-                if let Some(ref mut budget) = self.memory_budget {
-                    let old_size = estimate_entry_size(&old_entry);
-                    budget.remove_entry(old_size);
-                }
-            }
-            if let Some(old_id) = self.entry_ids.pop_front() {
-                self.id_to_entry.remove(&old_id);
-            }
-        }
-
-        let entry_id = EntryId::new_v4();
-        self.entry_ids.push_back(entry_id);
-        self.id_to_entry.insert(entry_id, entry.clone());
-        self.entries.push_back(entry);
-
-        // Update memory budget
-        if let Some(ref mut budget) = self.memory_budget {
-            budget.add_entry(entry_size);
-        }
-
-        // Invalidate indices since we added a new entry
-        self.soft_index = None;
-        self.hnsw_index = None;
+        let _ = self.internal_add(entry, entry_size);
     }
 
     /// Add a dream entry with class label (Phase 3B)
@@ -399,47 +355,7 @@ impl SimpleDreamPool {
         let entry = DreamEntry::with_class(tensor, result, class_label);
         let entry_size = estimate_entry_size(&entry);
 
-        // Check memory budget and evict if needed
-        if let Some(ref mut budget) = self.memory_budget {
-            while budget.needs_eviction() && !self.entries.is_empty() {
-                if let Some(old_entry) = self.entries.pop_front() {
-                    let old_size = estimate_entry_size(&old_entry);
-                    budget.remove_entry(old_size);
-                }
-                if let Some(old_id) = self.entry_ids.pop_front() {
-                    self.id_to_entry.remove(&old_id);
-                }
-            }
-        }
-
-        // Remove oldest entry if at capacity
-        if self.entries.len() >= self.config.max_size {
-            if let Some(old_entry) = self.entries.pop_front() {
-                if let Some(ref mut budget) = self.memory_budget {
-                    let old_size = estimate_entry_size(&old_entry);
-                    budget.remove_entry(old_size);
-                }
-            }
-            if let Some(old_id) = self.entry_ids.pop_front() {
-                self.id_to_entry.remove(&old_id);
-            }
-        }
-
-        let entry_id = EntryId::new_v4();
-        self.entry_ids.push_back(entry_id);
-        self.id_to_entry.insert(entry_id, entry.clone());
-        self.entries.push_back(entry);
-
-        // Update memory budget
-        if let Some(ref mut budget) = self.memory_budget {
-            budget.add_entry(entry_size);
-        }
-
-        // Invalidate indices since we added a new entry
-        self.soft_index = None;
-        self.hnsw_index = None;
-
-        true
+        self.internal_add(entry, entry_size)
     }
 
     /// Retrieve K most similar dreams based on cosine similarity of chroma signatures

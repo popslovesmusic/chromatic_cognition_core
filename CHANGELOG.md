@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Logged HNSW construction failures in `SimpleDreamPool::rebuild_soft_index`, ensuring
   ANN fallback decisions capture actionable error details while reverting to the
   linear index budget settings.
+- Unified `SimpleDreamPool` add flows behind `internal_add`, keeping memory-budget
+  evictions and index bookkeeping consistent across coherence-aware inserts.
+- Removed noisy HNSW eviction-path warnings so hot-path tracing remains clean while
+  the ANN rebuild diagnostics retain their detailed instrumentation.
 
 ### Added - Spectral Accumulation Determinism
 - Introduced Q16.48 fixed-point accumulator with Neumaier-compensated, fixed tree
