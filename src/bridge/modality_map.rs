@@ -2,7 +2,11 @@ use std::f32::consts::PI;
 
 use serde::Serialize;
 
-use crate::{config::BridgeConfig, spectral::SpectralTensor, tensor::ChromaticTensor};
+use crate::{
+    config::BridgeConfig,
+    spectral::{canonical_hue, SpectralTensor},
+    tensor::ChromaticTensor,
+};
 
 const DEFAULT_SEAM_EPSILON: f32 = PI * 0.05;
 
@@ -43,6 +47,18 @@ impl ModalityMapper {
             eprintln!("failed to log modality_map_decode: {err}");
         }
         chromatic
+    }
+
+    pub fn map_hue_to_category(&self, hue_radians: f32) -> usize {
+        let categories = self.config.spectral.categorical_count.max(1);
+        let canonical = canonical_hue(hue_radians);
+        let normalized = (canonical / std::f32::consts::TAU).clamp(0.0, 0.999_999);
+        let scaled = normalized.mul_add(categories as f32, f32::EPSILON * 128.0);
+        let mut index = scaled.floor() as usize;
+        if index >= categories {
+            index = categories - 1;
+        }
+        index
     }
 }
 
@@ -102,5 +118,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn hue_to_category_respects_wraparound() {
+        let config = BridgeConfig::from_str(
+            r#"
+            [bridge]
+            f_min = 110.0
+            octaves = 6.0
+            gamma = 1.0
+
+            [bridge.spectral]
+            fft_size = 1024
+            categorical_count = 12
+
+            [bridge.reversibility]
+            delta_e_tolerance = 1e-3
+            "#,
+        )
+        .expect("valid bridge config");
+
+        let mapper = ModalityMapper::new(config);
+        assert_eq!(mapper.map_hue_to_category(0.0), 0);
+
+        let wrapped = mapper.map_hue_to_category(std::f32::consts::TAU * 2.25);
+        let canonical = mapper.map_hue_to_category(std::f32::consts::TAU * 0.25);
+        assert_eq!(wrapped, canonical);
+
+        let categories = mapper.config().spectral.categorical_count;
+        let boundary = mapper.map_hue_to_category(std::f32::consts::TAU - 1e-6);
+        assert_eq!(boundary, categories - 1);
     }
 }

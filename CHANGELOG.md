@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added round-trip helpers (`encode_to_ums`, `decode_from_ums`) and unit coverage to
   validate spectral category normalisation and HSL recovery for Phase 7A integration.
 
+### Changed - Unified Modality Space Projection
+- Replaced categorical replication with deterministic 2049→256 spectral downsampling,
+  per-channel Chronicle μ/σ normalization, and hue consensus checks via
+  `ModalityMapper::map_hue_to_category`.
+
 ### Added - Native Rust Solver
 
 ### Added - Phase 5A Awareness & Prediction
