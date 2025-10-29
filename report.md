@@ -36,6 +36,7 @@
 - Regression suite: `cargo test` exercises 121 unit tests, 6 integration tests, and 20 doctests in ~48s on CPU-only hardware (cold build compile time: 2m14s).
 - Detailed execution log captured in `docs/TEST_REPORT.md` with suite durations and reproduction steps.
 - Phase 5C ethics filter clips unsafe learning-rate, tint, and augmentation directives, rolls back on violations, and journals every decision to `logs/meta.jsonl`.
+- Phase 4 audit: `MemoryBudget` models ANN overhead, `HnswIndex` validates id mappings with deterministic distance clamps, `SimpleDreamPool` falls back to linear search on ANN build errors for safety, and the findings are catalogued with line-level references in `docs/PHASE4_MEMORY_HNSW_AUDIT.md`.
 - `Phase5CConfig` exposes adjustable safety bounds (`lr_damp_max`, `cool_tint_max`, `pause_aug_max_steps`, `ethics_hue_jump_deg`) with unit coverage for default and custom parsing.
 - Phase 6C continuity controller translates trend slopes into bounded temporal actions, applies cooldown-governed updates to learning rate and dream-pool size, and normalizes phase weights when oscillations emerge.
 - `Phase6CConfig` adds cadence and adjustment bounds (`cycle_interval`, `lr_adjust_max`, `dream_pool_expand_max`, `trend_anomaly_cooldown`) for the continuity loop with parsing tests.

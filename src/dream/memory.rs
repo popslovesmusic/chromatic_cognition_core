@@ -3,8 +3,8 @@
 //! This module implements memory usage tracking and budget enforcement
 //! to prevent unbounded memory growth in large dream pools.
 
-use std::mem;
 use crate::dream::simple_pool::DreamEntry;
+use std::mem;
 
 /// Memory budget tracker for dream pool
 ///
@@ -24,12 +24,14 @@ use crate::dream::simple_pool::DreamEntry;
 pub struct MemoryBudget {
     /// Maximum memory budget in bytes
     max_bytes: usize,
-    /// Current memory usage in bytes
+    /// Current memory usage in bytes (raw, without ANN overhead adjustment)
     current_bytes: usize,
     /// Number of entries currently tracked
     entry_count: usize,
     /// Eviction threshold (0.0-1.0), triggers at this fraction of max_bytes
     eviction_threshold: f32,
+    /// Additional multiplier applied when ANN indexes mirror entry memory usage (e.g. HNSW ≈ 2×)
+    ann_overhead_factor: f32,
 }
 
 impl MemoryBudget {
@@ -51,6 +53,7 @@ impl MemoryBudget {
             current_bytes: 0,
             entry_count: 0,
             eviction_threshold: 0.9, // Trigger at 90%
+            ann_overhead_factor: 1.0,
         }
     }
 
@@ -66,7 +69,44 @@ impl MemoryBudget {
             current_bytes: 0,
             entry_count: 0,
             eviction_threshold: threshold.clamp(0.0, 1.0),
+            ann_overhead_factor: 1.0,
         }
+    }
+
+    /// Set the multiplier applied to memory usage when ANN indexes mirror dream memory
+    ///
+    /// `factor` is clamped to the range [1.0, 8.0] to avoid runaway scaling.
+    pub fn set_ann_overhead_factor(&mut self, factor: f32) {
+        self.ann_overhead_factor = factor.clamp(1.0, 8.0);
+    }
+
+    /// Get the current ANN overhead multiplier.
+    pub fn ann_overhead_factor(&self) -> f32 {
+        self.ann_overhead_factor
+    }
+
+    /// Compute the raw memory usage adjusted for ANN overhead.
+    fn adjusted_usage_bytes(&self) -> usize {
+        if self.current_bytes == 0 {
+            return 0;
+        }
+
+        let adjusted = (self.current_bytes as f64) * (self.ann_overhead_factor as f64);
+        if !adjusted.is_finite() {
+            usize::MAX
+        } else {
+            adjusted.ceil().min(usize::MAX as f64).max(0.0) as usize
+        }
+    }
+
+    /// Compute the eviction threshold in bytes.
+    fn threshold_bytes(&self) -> usize {
+        if self.max_bytes == 0 {
+            return 0;
+        }
+
+        let threshold = (self.max_bytes as f64) * (self.eviction_threshold as f64);
+        threshold.floor().clamp(0.0, self.max_bytes as f64) as usize
     }
 
     /// Check if adding an entry of given size would exceed budget
@@ -79,7 +119,13 @@ impl MemoryBudget {
     ///
     /// true if entry can be added without exceeding budget
     pub fn can_add(&self, entry_size: usize) -> bool {
-        self.current_bytes + entry_size <= self.max_bytes
+        if self.max_bytes == 0 {
+            return false;
+        }
+
+        let prospective = self.current_bytes.saturating_add(entry_size);
+        let adjusted = (prospective as f64) * (self.ann_overhead_factor as f64);
+        adjusted <= self.max_bytes as f64
     }
 
     /// Add an entry to the budget tracker
@@ -109,9 +155,13 @@ impl MemoryBudget {
     /// Fraction of budget currently used
     pub fn usage_ratio(&self) -> f32 {
         if self.max_bytes == 0 {
-            1.0
+            if self.current_bytes == 0 {
+                0.0
+            } else {
+                1.0
+            }
         } else {
-            self.current_bytes as f32 / self.max_bytes as f32
+            self.adjusted_usage_bytes() as f32 / self.max_bytes as f32
         }
     }
 
@@ -121,7 +171,11 @@ impl MemoryBudget {
     ///
     /// true if current usage exceeds eviction threshold
     pub fn needs_eviction(&self) -> bool {
-        self.usage_ratio() > self.eviction_threshold
+        if self.max_bytes == 0 {
+            return self.current_bytes > 0;
+        }
+
+        self.adjusted_usage_bytes() > self.threshold_bytes()
     }
 
     /// Get current memory usage in bytes
@@ -137,6 +191,26 @@ impl MemoryBudget {
     /// Get number of entries tracked
     pub fn entry_count(&self) -> usize {
         self.entry_count
+    }
+
+    /// Calculate required eviction count to return below threshold.
+    ///
+    /// Returns zero when the average entry size is unknown or the budget is already satisfied.
+    pub fn calculate_eviction_count(&self, avg_entry_size: usize) -> usize {
+        if avg_entry_size == 0 || self.entry_count == 0 {
+            return 0;
+        }
+
+        let threshold_bytes = self.threshold_bytes();
+        let usage = self.adjusted_usage_bytes();
+
+        if usage <= threshold_bytes {
+            return 0;
+        }
+
+        let bytes_to_free = usage - threshold_bytes;
+        let count = (bytes_to_free + avg_entry_size - 1) / avg_entry_size;
+        count.min(self.entry_count)
     }
 
     /// Get average entry size in bytes
@@ -156,13 +230,15 @@ impl MemoryBudget {
 
     /// Get memory statistics as a formatted string
     pub fn stats(&self) -> String {
+        let adjusted_mb = self.adjusted_usage_bytes() as f64 / (1024.0 * 1024.0);
         format!(
-            "Memory: {:.2} / {:.2} MB ({:.1}%), {} entries, avg {:.2} KB/entry",
-            self.current_bytes as f64 / (1024.0 * 1024.0),
+            "Memory: {:.2} / {:.2} MB ({:.1}%), {} entries, avg {:.2} KB/entry, overhead x{:.1}",
+            adjusted_mb,
             self.max_bytes as f64 / (1024.0 * 1024.0),
             self.usage_ratio() * 100.0,
             self.entry_count,
             self.average_entry_size() as f64 / 1024.0,
+            self.ann_overhead_factor,
         )
     }
 }
@@ -233,34 +309,26 @@ pub fn estimate_entry_size(entry: &DreamEntry) -> usize {
 
 /// Calculate required eviction count to free target bytes
 ///
-/// # Arguments
-///
-/// * `budget` - Current memory budget
-/// * `target_bytes` - Number of bytes to free
-/// * `avg_entry_size` - Average size per entry
-///
-/// # Returns
-///
-/// Number of entries to evict
-pub fn calculate_eviction_count(budget: &MemoryBudget, target_bytes: usize, avg_entry_size: usize) -> usize {
-    if avg_entry_size == 0 {
-        return 0;
-    }
-
-    let bytes_to_free = if budget.current_usage() > target_bytes {
-        budget.current_usage() - target_bytes
-    } else {
-        0
-    };
-
-    (bytes_to_free + avg_entry_size - 1) / avg_entry_size // Ceiling division
+/// This helper is kept for backwards compatibility with earlier tooling. It forwards to
+/// [`MemoryBudget::calculate_eviction_count`] using the budget's internal threshold and ANN
+/// overhead adjustment, ignoring the explicit `target_bytes` argument.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use MemoryBudget::calculate_eviction_count(avg_entry_size) instead."
+)]
+pub fn calculate_eviction_count(
+    budget: &MemoryBudget,
+    _target_bytes: usize,
+    avg_entry_size: usize,
+) -> usize {
+    budget.calculate_eviction_count(avg_entry_size)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::ChromaticTensor;
     use crate::solver::SolverResult;
+    use crate::tensor::ChromaticTensor;
 
     #[test]
     fn test_memory_budget_creation() {
@@ -369,12 +437,39 @@ mod tests {
 
     #[test]
     fn test_calculate_eviction_count() {
-        let mut budget = MemoryBudget::new(10); // 10 MB
-        budget.add_entry(5 * 1024 * 1024); // 5 MB used
+        let mut budget = MemoryBudget::with_threshold(10, 0.5); // 10 MB, 50% threshold
+        budget.add_entry(3 * 1024 * 1024); // 3 MB
+        budget.add_entry(3 * 1024 * 1024); // 6 MB total -> above 5 MB threshold
 
-        // Want to free 2 MB, avg entry is 1 MB
-        let count = calculate_eviction_count(&budget, 3 * 1024 * 1024, 1024 * 1024);
-        assert_eq!(count, 2); // Need to evict 2 entries
+        // Average entry size is 3 MB, so evicting one entry should restore budget
+        let count = budget.calculate_eviction_count(budget.average_entry_size());
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_eviction_with_ann_overhead() {
+        let mut budget = MemoryBudget::with_threshold(10, 0.9); // 10 MB, 90% threshold
+        budget.set_ann_overhead_factor(2.0); // HNSW ~2× memory
+
+        budget.add_entry(4 * 1024 * 1024); // Raw 4 MB => adjusted 8 MB
+        assert!(!budget.needs_eviction());
+
+        budget.add_entry(1 * 1024 * 1024); // Raw 5 MB => adjusted 10 MB (> 9 MB threshold)
+        assert!(budget.needs_eviction());
+
+        // Average entry size is 2.5 MB, eviction should drop adjusted usage below threshold
+        let count = budget.calculate_eviction_count(budget.average_entry_size());
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_zero_budget_handling() {
+        let mut budget = MemoryBudget::new(0);
+        assert!(!budget.needs_eviction());
+
+        budget.add_entry(512);
+        assert!(budget.needs_eviction());
+        assert_eq!(budget.calculate_eviction_count(512), 1);
     }
 
     #[test]

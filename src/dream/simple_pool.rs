@@ -179,7 +179,13 @@ impl SimpleDreamPool {
     /// Create a new dream pool with the given configuration
     pub fn new(config: PoolConfig) -> Self {
         let max_size = config.max_size;
-        let memory_budget = config.memory_budget_mb.map(|mb| MemoryBudget::new(mb));
+        let memory_budget = config.memory_budget_mb.map(|mb| {
+            let mut budget = MemoryBudget::new(mb);
+            if config.use_hnsw {
+                budget.set_ann_overhead_factor(2.0);
+            }
+            budget
+        });
 
         Self {
             entries: VecDeque::with_capacity(max_size),
@@ -669,6 +675,14 @@ impl SimpleDreamPool {
     ) {
         let embed_dim = mapper.dim;
 
+        if let Some(budget) = self.memory_budget.as_mut() {
+            if self.config.use_hnsw {
+                budget.set_ann_overhead_factor(2.0);
+            } else {
+                budget.set_ann_overhead_factor(1.0);
+            }
+        }
+
         // Clear old mappings
         self.id_to_entry.clear();
         self.entry_ids.clear();
@@ -689,26 +703,42 @@ impl SimpleDreamPool {
             let mut hnsw = HnswIndex::new(embed_dim, embeddings.len());
 
             // Add all embeddings (build() will construct the graph)
+            let mut ann_error = None;
             for (id, emb) in &embeddings {
-                let _ = hnsw.add(*id, emb.clone()); // Ignore errors, handled gracefully
+                if let Err(err) = hnsw.add(*id, emb.clone()) {
+                    ann_error = Some(err);
+                    break;
+                }
             }
 
-            // Build the HNSW graph (default: cosine similarity)
-            hnsw.build(&embeddings, Similarity::Cosine);
-            self.hnsw_index = Some(hnsw);
-            self.soft_index = None; // Clear linear index when using HNSW
-        } else {
-            // Build linear SoftIndex for O(n) search
-            let mut index = SoftIndex::new(embed_dim);
-
-            for (id, emb) in embeddings {
-                let _ = index.add(id, emb); // Gracefully skip on error
+            if ann_error.is_none() {
+                if let Err(err) = hnsw.build(Similarity::Cosine) {
+                    ann_error = Some(err);
+                } else {
+                    self.hnsw_index = Some(hnsw);
+                    self.soft_index = None; // Clear linear index when using HNSW
+                    return;
+                }
             }
 
-            index.build();
-            self.soft_index = Some(index);
-            self.hnsw_index = None; // Clear HNSW when using linear
+            if let Some(budget) = self.memory_budget.as_mut() {
+                budget.set_ann_overhead_factor(1.0);
+            }
+
+            // Fall through to linear index when ANN construction fails
+            self.hnsw_index = None;
         }
+
+        // Build linear SoftIndex for O(n) search
+        let mut index = SoftIndex::new(embed_dim);
+
+        for (id, emb) in embeddings {
+            let _ = index.add(id, emb); // Gracefully skip on error
+        }
+
+        index.build();
+        self.soft_index = Some(index);
+        self.hnsw_index = None; // Clear HNSW when using linear
     }
 
     /// Retrieve dreams using soft index with hybrid scoring (Phase 4)

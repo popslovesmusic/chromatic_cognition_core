@@ -276,6 +276,11 @@ Current benchmarks on 64×64×8 tensor (130,560 cells):
 - Phase 5B dissonance scoring module with meta-log output and adaptive reflection planner driven by configurable thresholds.
 - Regression testing documentation capturing `cargo test` results and reproduction steps (`docs/TEST_REPORT.md`).
 
+### Changed
+
+- Hardened Phase 4 memory budget and HNSW integration: ANN-aware eviction math, deterministic distance clamping, and safe fallback wiring (`src/dream/memory.rs`, `src/dream/hnsw_index.rs`, `src/dream/simple_pool.rs`).
+- Expanded the Phase 4 audit report with line-level findings, recommendations, and follow-up actions (`docs/PHASE4_MEMORY_HNSW_AUDIT.md`).
+
 ### Planned for Milestone 2: Gradient Projection + Logger
 
 - [ ] Enhanced gradient computation

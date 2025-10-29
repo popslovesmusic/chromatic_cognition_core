@@ -5,9 +5,9 @@
 //!
 //! **Performance:** 100× speedup at 10K entries with 95-99% recall
 
-use hnsw_rs::prelude::*;
-use crate::dream::soft_index::{EntryId, Similarity};
 use crate::dream::error::{DreamError, DreamResult};
+use crate::dream::soft_index::{EntryId, Similarity};
+use hnsw_rs::prelude::*;
 
 /// HNSW-based approximate nearest neighbor index
 ///
@@ -25,8 +25,9 @@ use crate::dream::error::{DreamError, DreamResult};
 ///
 /// ```ignore
 /// let mut index = HnswIndex::new(64, 1000); // 64D embeddings, 1000 capacity
-/// index.add(EntryId::new_v4(), vec![0.1, 0.2, ...]); // 64D vector
-/// let results = index.search(&query, 10, Similarity::Cosine);
+/// index.add(EntryId::new_v4(), vec![0.1, 0.2, ...])?; // 64D vector
+/// index.build(Similarity::Cosine)?;
+/// let results = index.search(&query, 10, Similarity::Cosine)?;
 /// ```
 pub struct HnswIndex<'a> {
     /// HNSW index for cosine similarity
@@ -35,6 +36,8 @@ pub struct HnswIndex<'a> {
     hnsw_euclidean: Option<Hnsw<'a, f32, DistL2>>,
     /// Mapping from internal ID to EntryId
     id_map: Vec<EntryId>,
+    /// Pending embeddings waiting to be inserted during build()
+    pending_embeddings: Vec<Vec<f32>>,
     /// Embedding dimension
     dim: usize,
     /// Maximum number of connections per node
@@ -61,6 +64,7 @@ impl<'a> HnswIndex<'a> {
             hnsw_cosine: None,
             hnsw_euclidean: None,
             id_map: Vec::with_capacity(capacity),
+            pending_embeddings: Vec::with_capacity(capacity),
             dim,
             max_connections: 16,
             ef_construction: 200,
@@ -88,6 +92,7 @@ impl<'a> HnswIndex<'a> {
             hnsw_cosine: None,
             hnsw_euclidean: None,
             id_map: Vec::with_capacity(capacity),
+            pending_embeddings: Vec::with_capacity(capacity),
             dim,
             max_connections,
             ef_construction,
@@ -110,15 +115,13 @@ impl<'a> HnswIndex<'a> {
             return Err(DreamError::dimension_mismatch(
                 self.dim,
                 embedding.len(),
-                "HNSW add"
+                "HNSW add",
             ));
         }
 
-        let _internal_id = self.id_map.len();
         self.id_map.push(id);
+        self.pending_embeddings.push(embedding);
 
-        // Note: Actual insertion happens in build()
-        // Store for now, will be inserted during build
         Ok(())
     }
 
@@ -132,8 +135,18 @@ impl<'a> HnswIndex<'a> {
     /// This implementation uses a simplified approach where we rebuild
     /// the entire index. A production implementation would support
     /// incremental updates.
-    pub fn build(&mut self, embeddings: &[(EntryId, Vec<f32>)], mode: Similarity) {
-        let num_entries = embeddings.len();
+    pub fn build(&mut self, mode: Similarity) -> DreamResult<()> {
+        if self.id_map.len() != self.pending_embeddings.len() {
+            return Err(DreamError::index_corrupted(
+                "HNSW build: id_map and pending embeddings length mismatch",
+            ));
+        }
+
+        let num_entries = self.pending_embeddings.len();
+
+        // Reset previous indexes before rebuilding
+        self.hnsw_cosine = None;
+        self.hnsw_euclidean = None;
 
         match mode {
             Similarity::Cosine => {
@@ -146,7 +159,7 @@ impl<'a> HnswIndex<'a> {
                 );
 
                 // Insert all embeddings
-                for (idx, (_id, embedding)) in embeddings.iter().enumerate() {
+                for (idx, embedding) in self.pending_embeddings.iter().enumerate() {
                     hnsw.insert((embedding.as_slice(), idx));
                 }
 
@@ -162,13 +175,19 @@ impl<'a> HnswIndex<'a> {
                 );
 
                 // Insert all embeddings
-                for (idx, (_id, embedding)) in embeddings.iter().enumerate() {
+                for (idx, embedding) in self.pending_embeddings.iter().enumerate() {
                     hnsw.insert((embedding.as_slice(), idx));
                 }
 
                 self.hnsw_euclidean = Some(hnsw);
             }
         }
+
+        // Truncate id_map to actual number of entries in case build() is called after clear()
+        self.id_map.truncate(num_entries);
+        self.pending_embeddings.clear();
+
+        Ok(())
     }
 
     /// Search for k nearest neighbors
@@ -188,25 +207,32 @@ impl<'a> HnswIndex<'a> {
     /// Returns error if:
     /// - Query dimension doesn't match index dimension
     /// - Index hasn't been built yet (call `build()` first)
-    pub fn search(&self, query: &[f32], k: usize, mode: Similarity) -> DreamResult<Vec<(EntryId, f32)>> {
+    pub fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        mode: Similarity,
+    ) -> DreamResult<Vec<(EntryId, f32)>> {
         if query.len() != self.dim {
             return Err(DreamError::dimension_mismatch(
                 self.dim,
                 query.len(),
-                "HNSW search"
+                "HNSW search",
             ));
         }
 
         let results = match mode {
             Similarity::Cosine => {
-                let hnsw = self.hnsw_cosine
+                let hnsw = self
+                    .hnsw_cosine
                     .as_ref()
                     .ok_or_else(|| DreamError::index_not_built("HNSW search (cosine)"))?;
 
                 hnsw.search(query, k, self.ef_search)
             }
             Similarity::Euclidean => {
-                let hnsw = self.hnsw_euclidean
+                let hnsw = self
+                    .hnsw_euclidean
                     .as_ref()
                     .ok_or_else(|| DreamError::index_not_built("HNSW search (euclidean)"))?;
 
@@ -215,21 +241,38 @@ impl<'a> HnswIndex<'a> {
         };
 
         // Convert internal IDs to EntryIds and distances to similarity scores
-        Ok(results
-            .into_iter()
-            .map(|neighbor| {
-                let internal_id = neighbor.d_id;
-                let distance = neighbor.distance;
+        let mut mapped = Vec::with_capacity(results.len());
 
-                // Convert distance to similarity score
-                let similarity = match mode {
-                    Similarity::Cosine => 1.0 - distance, // Cosine distance in [0, 2], similarity in [-1, 1]
-                    Similarity::Euclidean => 1.0 / (1.0 + distance), // Convert to similarity
-                };
+        for neighbor in results {
+            let internal_id = neighbor.d_id;
+            let distance = neighbor.distance;
 
-                (self.id_map[internal_id], similarity)
-            })
-            .collect())
+            if !distance.is_finite() {
+                return Err(DreamError::index_corrupted(
+                    "HNSW search: non-finite distance returned",
+                ));
+            }
+
+            let entry_id = *self.id_map.get(internal_id).ok_or_else(|| {
+                DreamError::index_corrupted(format!(
+                    "HNSW search: missing id_map entry for internal id {}",
+                    internal_id
+                ))
+            })?;
+
+            // Convert distance to similarity score, clamping to deterministic ranges
+            let similarity = match mode {
+                Similarity::Cosine => (1.0 - distance).clamp(-1.0, 1.0),
+                Similarity::Euclidean => {
+                    let sanitized = distance.max(0.0);
+                    (1.0 / (1.0 + sanitized)).clamp(0.0, 1.0)
+                }
+            };
+
+            mapped.push((entry_id, similarity));
+        }
+
+        Ok(mapped)
     }
 
     /// Get the number of entries in the index
@@ -247,6 +290,7 @@ impl<'a> HnswIndex<'a> {
         self.hnsw_cosine = None;
         self.hnsw_euclidean = None;
         self.id_map.clear();
+        self.pending_embeddings.clear();
     }
 
     /// Get embedding dimension
@@ -325,11 +369,11 @@ mod tests {
         let embeddings = create_test_embeddings(100, 64);
         let mut index = HnswIndex::new(64, 100);
 
-        // Build index
-        index.build(&embeddings, Similarity::Cosine);
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
 
-        // Update id_map after build
-        index.id_map = embeddings.iter().map(|(id, _)| *id).collect();
+        index.build(Similarity::Cosine).unwrap();
 
         assert_eq!(index.len(), 100);
         assert!(index.stats().built);
@@ -348,11 +392,11 @@ mod tests {
         let embeddings = create_test_embeddings(50, 32);
         let mut index = HnswIndex::new(32, 50);
 
-        // Build index
-        index.build(&embeddings, Similarity::Euclidean);
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
 
-        // Update id_map after build
-        index.id_map = embeddings.iter().map(|(id, _)| *id).collect();
+        index.build(Similarity::Euclidean).unwrap();
 
         assert_eq!(index.len(), 50);
 
@@ -370,8 +414,11 @@ mod tests {
         let embeddings = create_test_embeddings(10, 16);
         let mut index = HnswIndex::new(16, 10);
 
-        index.build(&embeddings, Similarity::Cosine);
-        index.id_map = embeddings.iter().map(|(id, _)| *id).collect();
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
+
+        index.build(Similarity::Cosine).unwrap();
 
         assert_eq!(index.len(), 10);
 
@@ -386,8 +433,11 @@ mod tests {
         let embeddings = create_test_embeddings(10, 64);
         let mut index = HnswIndex::new(64, 10);
 
-        index.build(&embeddings, Similarity::Cosine);
-        index.id_map = embeddings.iter().map(|(id, _)| *id).collect();
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
+
+        index.build(Similarity::Cosine).unwrap();
 
         // Try to search with wrong dimension
         let wrong_query = vec![0.0; 32]; // 32D instead of 64D
@@ -416,5 +466,36 @@ mod tests {
             }
             _ => panic!("Expected IndexNotBuilt error"),
         }
+    }
+
+    #[test]
+    fn test_hnsw_build_detects_mismatch() {
+        let mut index = HnswIndex::new(16, 4);
+
+        // Force mismatch by tampering with pending embeddings
+        index.id_map.push(EntryId::new_v4());
+        let result = index.build(Similarity::Cosine);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hnsw_search_reports_id_map_desync() {
+        let embeddings = create_test_embeddings(5, 8);
+        let mut index = HnswIndex::new(8, 5);
+
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
+
+        index.build(Similarity::Cosine).unwrap();
+
+        // Desynchronize id_map manually
+        index.id_map.pop();
+
+        let query = &embeddings[0].1;
+        let result = index.search(query, 3, Similarity::Cosine);
+
+        assert!(matches!(result, Err(DreamError::IndexCorrupted { .. })));
     }
 }
