@@ -26,6 +26,7 @@
 - Visualization uses Plotters' bitmap backend for dependency-light rendering.
 
 ## Latest Validation Updates
+- CIE ΔE94 color-difference check enforces the ≤1e-3 reversibility threshold with deterministic D65/2° conversions (`src/spectral/color.rs`).
 - Appendix A hue bridge converts ChromaticTensor samples into SpectralTensor frequency
   channels with canonical hue wrapping, circular interpolation, and seam blending that
   preserves round-trip error below 1e-6 radians.

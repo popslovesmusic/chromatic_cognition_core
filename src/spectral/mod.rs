@@ -5,9 +5,11 @@
 //! and identify frequency patterns in dream tensors.
 
 pub mod bridge;
+pub mod color;
 pub mod fft;
 
 pub use bridge::{canonical_hue, circular_mean, SpectralTensor};
+pub use color::{delta_e94, srgb_to_lab, DELTA_E94_TOLERANCE};
 pub use fft::{
     compute_spectral_entropy, extract_spectral_features, SpectralFeatures, WindowFunction,
 };

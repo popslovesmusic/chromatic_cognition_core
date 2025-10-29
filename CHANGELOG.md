@@ -277,6 +277,17 @@ Current benchmarks on 64×64×8 tensor (130,560 cells):
 
 ### Added
 
+- Deterministic CIE ΔE94 color difference metric with fixed D65/2° parameters and round-trip tolerance constant (`src/spectral/color.rs`).
+- Explicit sRGB → CIELAB conversion helper exported for chromatic reversibility checks (`src/spectral/mod.rs`).
+
+### Changed
+
+- Re-exported spectral utilities now include perceptual distance helpers for reuse across dream and solver modules.
+
+---
+
+### Added
+
 - Phase 5B dissonance scoring module with meta-log output and adaptive reflection planner driven by configurable thresholds.
 - Regression testing documentation capturing `cargo test` results and reproduction steps (`docs/TEST_REPORT.md`).
 
