@@ -58,7 +58,8 @@ pub use meta::{
 pub use solver::native::ChromaticNativeSolver;
 pub use solver::{Solver, SolverResult};
 pub use spectral::{
-    compute_spectral_entropy, extract_spectral_features, SpectralFeatures, WindowFunction,
+    canonical_hue, circular_mean, compute_spectral_entropy, extract_spectral_features,
+    SpectralFeatures, SpectralTensor, WindowFunction,
 };
 pub use tensor::gradient::GradientLayer;
 pub use tensor::operations::{complement, filter, mix, saturate};

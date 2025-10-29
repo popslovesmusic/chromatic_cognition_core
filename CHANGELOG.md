@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Hue Continuity Bridge
+- Spectral bridge adds deterministic hue normalization, seam blending, and reversible
+  ChromaticTensor ↔ SpectralTensor conversion with frequency storage.
+
 ### Added - Native Rust Solver
 
 ### Added - Phase 5A Awareness & Prediction

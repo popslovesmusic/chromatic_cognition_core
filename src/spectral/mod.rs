@@ -4,8 +4,10 @@
 //! for chromatic fields. Used by the Learner to compute spectral entropy
 //! and identify frequency patterns in dream tensors.
 
+pub mod bridge;
 pub mod fft;
 
+pub use bridge::{canonical_hue, circular_mean, SpectralTensor};
 pub use fft::{
     compute_spectral_entropy, extract_spectral_features, SpectralFeatures, WindowFunction,
 };

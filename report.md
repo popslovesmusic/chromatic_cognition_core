@@ -26,6 +26,9 @@
 - Visualization uses Plotters' bitmap backend for dependency-light rendering.
 
 ## Latest Validation Updates
+- Appendix A hue bridge converts ChromaticTensor samples into SpectralTensor frequency
+  channels with canonical hue wrapping, circular interpolation, and seam blending that
+  preserves round-trip error below 1e-6 radians.
 - Phase 5A awareness buffer captures per-cycle coherence, entropy, spectral energy, and gradient RMS for deterministic replay.
 - AR(2) predictor delivers bounded two-step forecasts for coherence, entropy, and gradient energy with >0.8 Pearson correlation on synthetic validation traces.
 - Phase 5B dissonance scoring detects >90% of injected drifts with <5% false positives and logs cycle-level deltas to `logs/meta_dissonance.jsonl`.
