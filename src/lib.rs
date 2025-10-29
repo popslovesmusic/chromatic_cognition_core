@@ -31,6 +31,7 @@
 //! - [`logging`] - JSON line-delimited logging
 //! - [`training`] - Loss functions and training metrics
 
+pub mod bridge;
 pub mod config;
 pub mod data;
 pub mod dream;
@@ -43,6 +44,7 @@ pub mod spectral;
 pub mod tensor;
 pub mod training;
 
+pub use bridge::ModalityMapper;
 pub use config::{
     BridgeConfig, EngineConfig, Phase5AConfig, Phase5BConfig, Phase5CConfig, Phase6BConfig,
 };

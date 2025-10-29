@@ -33,6 +33,9 @@
 - Appendix A hue bridge converts ChromaticTensor samples into SpectralTensor frequency
   channels with canonical hue wrapping, circular interpolation, and seam blending that
   preserves round-trip error below 1e-6 radians.
+- High-level `ModalityMapper` now wraps the spectral bridge, wiring encode/decode flows
+  through the loaded `BridgeConfig` and emitting JSON logs for every tensor conversion
+  (`src/bridge/modality_map.rs`).
 - Spectral feature extraction now routes all energy and entropy sums through a Q16.48
   fixed-point, Neumaier-compensated reduction tree with explicit round-to-even casting,
   keeping reorder deltas below 0.5 dB across platforms (`src/spectral/accumulate.rs`).

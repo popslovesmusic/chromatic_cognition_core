@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including spectral accumulation and reversibility guard-rails (`src/config.rs`).
 - Documented `config/bridge.toml` usage alongside engine configuration in the README.
 
+### Added - Modality Mapper Wrapper
+- Added `bridge::ModalityMapper` as a deterministic façade over the spectral bridge,
+  exposing encode/decode helpers that respect the loaded `BridgeConfig` and emit
+  operation logs for tensor conversions (`src/bridge/modality_map.rs`).
+- Re-exported the mapper from the crate root so downstream integrations can request
+  chromatic ↔ spectral conversions without touching lower-level seam parameters.
+
 ### Added - Native Rust Solver
 
 ### Added - Phase 5A Awareness & Prediction
