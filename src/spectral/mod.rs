@@ -4,6 +4,7 @@
 //! for chromatic fields. Used by the Learner to compute spectral entropy
 //! and identify frequency patterns in dream tensors.
 
+pub mod accumulate;
 pub mod bridge;
 pub mod color;
 pub mod fft;

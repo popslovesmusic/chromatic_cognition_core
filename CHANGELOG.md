@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Spectral Accumulation Determinism
+- Introduced Q16.48 fixed-point accumulator with Neumaier-compensated, fixed tree
+  reduction for spectral energy sums.
+- Updated FFT feature extraction to rely on deterministic rounding when converting
+  accumulated spectra back to `f32`, ensuring platform-stable entropy and band
+  energy metrics.
+
 ### Added - Hue Continuity Bridge
 - Spectral bridge adds deterministic hue normalization, seam blending, and reversible
   ChromaticTensor ↔ SpectralTensor conversion with frequency storage.

@@ -8,6 +8,7 @@
 //! to bias the Dreamer toward dreams with specific frequency characteristics that
 //! historically helped training convergence.
 
+use super::accumulate::{deterministic_mean, deterministic_sum};
 use crate::tensor::ChromaticTensor;
 use ndarray::Array2;
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -134,21 +135,22 @@ pub fn extract_spectral_features(
     let (low_g, mid_g, high_g) = compute_band_energies(&green_psd);
     let (low_b, mid_b, high_b) = compute_band_energies(&blue_psd);
 
-    let low_freq_energy = (low_r + low_g + low_b) / 3.0;
-    let mid_freq_energy = (mid_r + mid_g + mid_b) / 3.0;
-    let high_freq_energy = (high_r + high_g + high_b) / 3.0;
+    let low_freq_energy = deterministic_mean(&[low_r, low_g, low_b]);
+    let mid_freq_energy = deterministic_mean(&[mid_r, mid_g, mid_b]);
+    let high_freq_energy = deterministic_mean(&[high_r, high_g, high_b]);
 
     // Compute spectral entropy (average across RGB)
     let entropy_r = compute_spectral_entropy(&red_psd);
     let entropy_g = compute_spectral_entropy(&green_psd);
     let entropy_b = compute_spectral_entropy(&blue_psd);
-    let entropy = (entropy_r + entropy_g + entropy_b) / 3.0;
+    let entropy = deterministic_mean(&[entropy_r, entropy_g, entropy_b]);
 
     // Mean PSD
-    let mean_psd = (red_psd.iter().sum::<f32>()
-        + green_psd.iter().sum::<f32>()
-        + blue_psd.iter().sum::<f32>())
-        / (3.0 * red_psd.len() as f32);
+    let mean_psd = deterministic_sum(&[
+        deterministic_sum(&red_psd),
+        deterministic_sum(&green_psd),
+        deterministic_sum(&blue_psd),
+    ]) / (3.0 * red_psd.len() as f32);
 
     SpectralFeatures {
         entropy,
@@ -185,7 +187,7 @@ pub fn compute_spectral_entropy(psd: &[f32]) -> f32 {
     }
 
     // Normalize PSD to probability distribution
-    let total: f32 = psd.iter().sum();
+    let total = deterministic_sum(psd);
     if total < 1e-10 {
         return 0.0; // Flat spectrum (max entropy)
     }
@@ -193,11 +195,13 @@ pub fn compute_spectral_entropy(psd: &[f32]) -> f32 {
     let probs: Vec<f32> = psd.iter().map(|&p| p / total).collect();
 
     // Compute Shannon entropy: -Σ p_i log(p_i)
-    let entropy: f32 = probs
-        .iter()
-        .filter(|&&p| p > 1e-10) // Avoid log(0)
-        .map(|&p| -p * p.ln())
-        .sum();
+    let mut terms = Vec::with_capacity(probs.len());
+    for &p in &probs {
+        if p > 1e-10 {
+            terms.push(-p * p.ln());
+        }
+    }
+    let entropy = deterministic_sum(&terms);
 
     // Normalize by max entropy (log(N))
     let max_entropy = (psd.len() as f32).ln();
@@ -217,13 +221,14 @@ fn extract_channel(tensor: &ChromaticTensor, channel: usize) -> Array2<f32> {
     let (rows, cols, layers, _) = tensor.shape();
     let mut result = Array2::zeros((rows, cols));
 
+    let mut buffer = Vec::with_capacity(layers);
     for i in 0..rows {
         for j in 0..cols {
-            let mut sum = 0.0;
+            buffer.clear();
             for k in 0..layers {
-                sum += tensor.get_rgb(i, j, k)[channel];
+                buffer.push(tensor.get_rgb(i, j, k)[channel]);
             }
-            result[[i, j]] = sum / layers as f32;
+            result[[i, j]] = deterministic_mean(&buffer);
         }
     }
 
@@ -321,9 +326,9 @@ fn compute_band_energies(psd: &[f32]) -> (f32, f32, f32) {
     let low_cutoff = n / 4;
     let high_cutoff = 3 * n / 4;
 
-    let low_energy: f32 = psd[..low_cutoff].iter().sum();
-    let mid_energy: f32 = psd[low_cutoff..high_cutoff].iter().sum();
-    let high_energy: f32 = psd[high_cutoff..].iter().sum();
+    let low_energy = deterministic_sum(&psd[..low_cutoff]);
+    let mid_energy = deterministic_sum(&psd[low_cutoff..high_cutoff]);
+    let high_energy = deterministic_sum(&psd[high_cutoff..]);
 
     (low_energy, mid_energy, high_energy)
 }
@@ -347,8 +352,7 @@ mod tests {
         // At n=4: 0.5 - 0.5*cos(8π/5) ≈ 0.095 (not exactly 0 for N=5)
         // The window is symmetric and peaks in the middle
         assert!(window[0] < 0.01); // Near zero at start
-        assert!(window[2] > 0.9); // Peak near 1 in middle
-        // Don't check endpoint for odd-length windows
+        assert!(window[2] > 0.9); // Peak near 1 in middle; ignore odd-length endpoints
     }
 
     #[test]

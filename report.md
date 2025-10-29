@@ -30,6 +30,9 @@
 - Appendix A hue bridge converts ChromaticTensor samples into SpectralTensor frequency
   channels with canonical hue wrapping, circular interpolation, and seam blending that
   preserves round-trip error below 1e-6 radians.
+- Spectral feature extraction now routes all energy and entropy sums through a Q16.48
+  fixed-point, Neumaier-compensated reduction tree with explicit round-to-even casting,
+  keeping reorder deltas below 0.5 dB across platforms (`src/spectral/accumulate.rs`).
 - Phase 5A awareness buffer captures per-cycle coherence, entropy, spectral energy, and gradient RMS for deterministic replay.
 - AR(2) predictor delivers bounded two-step forecasts for coherence, entropy, and gradient energy with >0.8 Pearson correlation on synthetic validation traces.
 - Phase 5B dissonance scoring detects >90% of injected drifts with <5% false positives and logs cycle-level deltas to `logs/meta_dissonance.jsonl`.
@@ -37,7 +40,7 @@
 - Training examples now populate the `TrainingConfig::retrieval_mode` field and use the current solver signature so `cargo test` builds all binaries without manual fixes.
 - The Phase 3B validation scenario performs class-aware dream mixing, captures Δloss feedback into the utility aggregator, and writes the synthesized bias profile to `logs/phase_3b_bias_profile.json`.
 - Dream module documentation snippets import `PoolConfig` from the correct module and avoid non-ASCII operators, keeping doctests green.
-- Regression suite: `cargo test` exercises 121 unit tests, 6 integration tests, and 20 doctests in ~48s on CPU-only hardware (cold build compile time: 2m14s).
+- Regression suite: `cargo test` exercises 210 unit tests, 7 integration tests, and 27 doctests in ~72s on CPU-only hardware (cold build compile time: 3m27s).
 - Detailed execution log captured in `docs/TEST_REPORT.md` with suite durations and reproduction steps.
 - Phase 5C ethics filter clips unsafe learning-rate, tint, and augmentation directives, rolls back on violations, and journals every decision to `logs/meta.jsonl`.
 - Phase 4 audit: `MemoryBudget` models ANN overhead, `HnswIndex` validates id mappings with deterministic distance clamps, `SimpleDreamPool` falls back to linear search on ANN build errors for safety, and the findings are catalogued with line-level references in `docs/PHASE4_MEMORY_HNSW_AUDIT.md`.
