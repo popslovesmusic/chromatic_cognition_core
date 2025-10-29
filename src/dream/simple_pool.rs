@@ -778,6 +778,9 @@ impl SimpleDreamPool {
             let mut ann_error = None;
             for (id, emb) in &embeddings {
                 if let Err(err) = hnsw.add(*id, emb.clone()) {
+                    tracing::warn!(
+                        "Failed to insert embedding {id:?} into HNSW index; falling back to linear index: {err}"
+                    );
                     ann_error = Some(err);
                     break;
                 }
@@ -785,6 +788,7 @@ impl SimpleDreamPool {
 
             if ann_error.is_none() {
                 if let Err(err) = hnsw.build(Similarity::Cosine) {
+                    tracing::warn!("HNSW index build failed; falling back to linear index: {err}");
                     ann_error = Some(err);
                 } else {
                     self.hnsw_index = Some(hnsw);
@@ -798,6 +802,9 @@ impl SimpleDreamPool {
             }
 
             // Fall through to linear index when ANN construction fails
+            if ann_error.is_some() {
+                tracing::warn!("Falling back to linear retrieval after HNSW construction failure");
+            }
             self.hnsw_index = None;
         }
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - Dream Pool Diagnostics
+- Logged HNSW construction failures in `SimpleDreamPool::rebuild_soft_index`, ensuring
+  ANN fallback decisions capture actionable error details while reverting to the
+  linear index budget settings.
+
 ### Added - Spectral Accumulation Determinism
 - Introduced Q16.48 fixed-point accumulator with Neumaier-compensated, fixed tree
   reduction for spectral energy sums.
