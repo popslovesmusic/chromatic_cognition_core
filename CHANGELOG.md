@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-exported the mapper from the crate root so downstream integrations can request
   chromatic ↔ spectral conversions without touching lower-level seam parameters.
 
+### Added - Unified Modality Space Projection
+- Implemented `bridge::modality_ums` with a deterministic 512D Unified Modality Space
+  vector that embeds spectral categories, replicated HSL channels, and temporal priors
+  normalised by Chronicle statistics.
+- Added round-trip helpers (`encode_to_ums`, `decode_from_ums`) and unit coverage to
+  validate spectral category normalisation and HSL recovery for Phase 7A integration.
+
 ### Added - Native Rust Solver
 
 ### Added - Phase 5A Awareness & Prediction

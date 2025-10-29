@@ -36,6 +36,9 @@
 - High-level `ModalityMapper` now wraps the spectral bridge, wiring encode/decode flows
   through the loaded `BridgeConfig` and emitting JSON logs for every tensor conversion
   (`src/bridge/modality_map.rs`).
+- Unified Modality Space encoder (`bridge::modality_ums`) projects chromatic tokens into
+  512D vectors with deterministic spectral-category replication, HSL tiling, Chronicle
+  normalisation, and decode coverage for round-trip consensus checks.
 - Spectral feature extraction now routes all energy and entropy sums through a Q16.48
   fixed-point, Neumaier-compensated reduction tree with explicit round-to-even casting,
   keeping reorder deltas below 0.5 dB across platforms (`src/spectral/accumulate.rs`).
