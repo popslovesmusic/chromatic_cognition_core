@@ -74,6 +74,8 @@ impl UnifiedModalityVector {
     }
 }
 
+pub type UMSVector = UnifiedModalityVector;
+
 #[derive(Debug)]
 struct ChronicleNormalization {
     mu: [f32; UMS_DIM],
@@ -128,10 +130,7 @@ pub fn encode_to_ums(mapper: &ModalityMapper, tensor: &ChromaticTensor) -> Unifi
     }
 }
 
-pub fn decode_from_ums(
-    mapper: &ModalityMapper,
-    vector: &UnifiedModalityVector,
-) -> (f32, f32, f32, usize) {
+pub fn decode_from_ums(vector: &UMSVector) -> [f32; 3] {
     assert_eq!(
         vector.channels.len(),
         UMS_DIM,
@@ -140,18 +139,17 @@ pub fn decode_from_ums(
 
     let stats = chronicle_normalization();
     let mut raw = [0.0f32; UMS_DIM];
-    for (idx, value) in raw.iter_mut().enumerate() {
+    for idx in 0..UMS_DIM {
         let sigma = safe_sigma(stats.sigma[idx]);
-        *value = vector.channels[idx] * sigma + stats.mu[idx];
+        raw[idx] = vector.channels[idx] * sigma + stats.mu[idx];
     }
 
     let hue_encoded = raw[SPECTRAL_BAND_DIM];
     let hue_radians = canonical_hue((hue_encoded + 1.0) * PI);
     let saturation = raw[SPECTRAL_BAND_DIM + 1].clamp(0.0, 1.0);
     let luminance = raw[SPECTRAL_BAND_DIM + 2].clamp(0.0, 1.0);
-    let category = mapper.map_hue_to_category(hue_radians);
 
-    (hue_radians, saturation, luminance, category)
+    [hue_radians, saturation, luminance]
 }
 
 fn aggregate_spectral_bins(spectral: &SpectralTensor, bin_count: usize) -> Vec<f32> {
@@ -371,7 +369,7 @@ fn safe_sigma(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::BridgeConfig;
+    use crate::{config::BridgeConfig, spectral::delta_e94};
     use std::f32::consts::TAU;
 
     fn bridge_config() -> BridgeConfig {
@@ -461,7 +459,11 @@ mod tests {
         let tensor = ChromaticTensor::from_seed(13, 4, 4, 2);
 
         let ums = encode_to_ums(&mapper, &tensor);
-        let (h_rad, s, l, category) = decode_from_ums(&mapper, &ums);
+        let decoded = decode_from_ums(&ums);
+        let h_rad = decoded[0];
+        let s = decoded[1];
+        let l = decoded[2];
+        let category = mapper.map_hue_to_category(h_rad);
 
         let mean_rgb = tensor.mean_rgb();
         let (expected_h_norm, expected_s, expected_l) = rgb_to_hsl(mean_rgb);
@@ -473,6 +475,43 @@ mod tests {
 
         let expected_category = mapper.map_hue_to_category(expected_h_rad);
         assert_eq!(category, expected_category);
+    }
+
+    #[test]
+    fn ums_round_trip_respects_delta_e_tolerance() {
+        let config = bridge_config();
+        let tolerance = config.reversibility.delta_e_tolerance;
+        let mapper = ModalityMapper::new(config);
+
+        let categories = mapper.config().spectral.categorical_count.max(1);
+        let target_category = categories / 2;
+        let step = TAU / categories as f32;
+        let hue = canonical_hue(step * target_category as f32);
+        let saturation = 0.65;
+        let luminance = 0.45;
+        let hue_norm = canonical_hue(hue) / TAU;
+        let expected_rgb = hsl_to_rgb(hue_norm, saturation, luminance);
+
+        let mut tensor = ChromaticTensor::new(1, 1, 1);
+        for channel in 0..3 {
+            tensor.colors[[0, 0, 0, channel]] = expected_rgb[channel];
+        }
+
+        let ums = encode_to_ums(&mapper, &tensor);
+        let decoded = decode_from_ums(&ums);
+        let decoded_h_norm = canonical_hue(decoded[0]) / TAU;
+        let decoded_rgb = hsl_to_rgb(decoded_h_norm, decoded[1], decoded[2]);
+        let delta_e = delta_e94(expected_rgb, decoded_rgb);
+
+        assert!(
+            delta_e <= tolerance,
+            "ΔE94={} exceeded tolerance {}",
+            delta_e,
+            tolerance
+        );
+
+        let recovered_category = mapper.map_hue_to_category(decoded[0]);
+        assert_eq!(recovered_category, target_category);
     }
 
     #[test]
@@ -500,6 +539,45 @@ mod tests {
         for count in layer_counts {
             assert_eq!(count, 3 * 12);
         }
+    }
+
+    fn hsl_to_rgb(h_norm: f32, saturation: f32, luminance: f32) -> [f32; 3] {
+        let h = h_norm.rem_euclid(1.0);
+        let s = saturation.clamp(0.0, 1.0);
+        let l = luminance.clamp(0.0, 1.0);
+
+        if s <= f32::EPSILON {
+            return [l, l, l];
+        }
+
+        let q = if l < 0.5 {
+            l * (1.0 + s)
+        } else {
+            l + s - l * s
+        };
+        let p = 2.0 * l - q;
+
+        let mut channels = [h + (1.0 / 3.0), h, h - (1.0 / 3.0)];
+        for value in &mut channels {
+            if *value < 0.0 {
+                *value += 1.0;
+            }
+            if *value > 1.0 {
+                *value -= 1.0;
+            }
+        }
+
+        channels.map(|component| {
+            if component < (1.0 / 6.0) {
+                p + (q - p) * 6.0 * component
+            } else if component < 0.5 {
+                q
+            } else if component < (2.0 / 3.0) {
+                p + (q - p) * (2.0 / 3.0 - component) * 6.0
+            } else {
+                p
+            }
+        })
     }
 
     #[test]

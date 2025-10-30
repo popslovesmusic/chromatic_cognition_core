@@ -44,7 +44,9 @@ pub mod spectral;
 pub mod tensor;
 pub mod training;
 
-pub use bridge::{decode_from_ums, encode_to_ums, ModalityMapper, UnifiedModalityVector};
+pub use bridge::{
+    decode_from_ums, encode_to_ums, ModalityMapper, UMSVector, UnifiedModalityVector,
+};
 pub use config::{
     BridgeConfig, EngineConfig, Phase5AConfig, Phase5BConfig, Phase5CConfig, Phase6BConfig,
 };
