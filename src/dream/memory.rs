@@ -60,8 +60,10 @@ impl MemoryBudget {
     /// let budget = MemoryBudget::new(100); // 100 MB limit
     /// ```
     pub fn new(max_mb: usize) -> Self {
+        let max_bytes = max_mb.saturating_mul(1024).saturating_mul(1024);
+
         Self {
-            max_bytes: max_mb * 1024 * 1024,
+            max_bytes,
             current_bytes: 0,
             entry_count: 0,
             eviction_threshold: 0.9, // Trigger at 90%
@@ -76,8 +78,10 @@ impl MemoryBudget {
     /// * `max_mb` - Maximum memory budget in megabytes
     /// * `threshold` - Eviction threshold (0.0-1.0)
     pub fn with_threshold(max_mb: usize, threshold: f32) -> Self {
+        let max_bytes = max_mb.saturating_mul(1024).saturating_mul(1024);
+
         Self {
-            max_bytes: max_mb * 1024 * 1024,
+            max_bytes,
             current_bytes: 0,
             entry_count: 0,
             eviction_threshold: threshold.clamp(0.0, 1.0),
@@ -146,8 +150,8 @@ impl MemoryBudget {
     ///
     /// * `entry_size` - Size of entry in bytes
     pub fn add_entry(&mut self, entry_size: usize) {
-        self.current_bytes += entry_size;
-        self.entry_count += 1;
+        self.current_bytes = self.current_bytes.saturating_add(entry_size);
+        self.entry_count = self.entry_count.saturating_add(1);
     }
 
     /// Remove an entry from the budget tracker
@@ -220,8 +224,11 @@ impl MemoryBudget {
             return 0;
         }
 
-        let bytes_to_free = usage - threshold_bytes;
-        let count = (bytes_to_free + avg_entry_size - 1) / avg_entry_size;
+        let bytes_to_free = usage.saturating_sub(threshold_bytes);
+        let numerator = bytes_to_free
+            .saturating_add(avg_entry_size)
+            .saturating_sub(1);
+        let count = numerator / avg_entry_size;
         count.min(self.entry_count)
     }
 
@@ -313,7 +320,7 @@ impl MemoryBudget {
 ///
 /// Estimated size in bytes
 pub fn estimate_entry_size(entry: &DreamEntry) -> usize {
-    let mut size = 0;
+    let mut size = 0usize;
 
     // ChromaticTensor: colors (4D: rows×cols×layers×3) + certainty (3D: rows×cols×layers)
     let shape = entry.tensor.colors.shape();
@@ -321,48 +328,64 @@ pub fn estimate_entry_size(entry: &DreamEntry) -> usize {
     let cols = shape[1];
     let layers = shape[2];
 
-    let colors_size = rows * cols * layers * 3 * mem::size_of::<f32>();
-    let certainty_size = rows * cols * layers * mem::size_of::<f32>();
-    size += colors_size + certainty_size;
+    let colors_size = rows
+        .saturating_mul(cols)
+        .saturating_mul(layers)
+        .saturating_mul(3)
+        .saturating_mul(mem::size_of::<f32>());
+    let certainty_size = rows
+        .saturating_mul(cols)
+        .saturating_mul(layers)
+        .saturating_mul(mem::size_of::<f32>());
+    size = size.saturating_add(colors_size);
+    size = size.saturating_add(certainty_size);
 
     // SolverResult: 3 f64 fields (energy, coherence, violation)
-    size += 3 * mem::size_of::<f64>();
+    let solver_size = 3usize.saturating_mul(mem::size_of::<f64>());
+    size = size.saturating_add(solver_size);
 
     // Chroma signature: 3 f32
-    size += 3 * mem::size_of::<f32>();
+    let chroma_size = 3usize.saturating_mul(mem::size_of::<f32>());
+    size = size.saturating_add(chroma_size);
 
     // Class label: Option<ColorClass> = Option<u8>
-    size += mem::size_of::<Option<u8>>();
+    size = size.saturating_add(mem::size_of::<Option<u8>>());
 
     // Utility: Option<f32>
-    size += mem::size_of::<Option<f32>>();
+    size = size.saturating_add(mem::size_of::<Option<f32>>());
 
     // Timestamp: SystemTime (2 × u64)
-    size += 2 * mem::size_of::<u64>();
+    let timestamp_size = 2usize.saturating_mul(mem::size_of::<u64>());
+    size = size.saturating_add(timestamp_size);
 
     // Usage count: usize
-    size += mem::size_of::<usize>();
+    size = size.saturating_add(mem::size_of::<usize>());
 
     // Spectral features: 6 fields (5 f32 + array of 3 usize)
-    size += 5 * mem::size_of::<f32>() + 3 * mem::size_of::<usize>();
+    let spectral_size = 5usize
+        .saturating_mul(mem::size_of::<f32>())
+        .saturating_add(3usize.saturating_mul(mem::size_of::<usize>()));
+    size = size.saturating_add(spectral_size);
 
     // Embedding vector: Option<Vec<f32>>
     if let Some(ref embed) = entry.embed {
-        size += embed.len() * mem::size_of::<f32>();
-        size += mem::size_of::<Vec<f32>>(); // Vec overhead
+        let embed_data = embed.len().saturating_mul(mem::size_of::<f32>());
+        size = size.saturating_add(embed_data);
+        size = size.saturating_add(mem::size_of::<Vec<f32>>()); // Vec overhead
     } else {
-        size += mem::size_of::<Option<Vec<f32>>>();
+        size = size.saturating_add(mem::size_of::<Option<Vec<f32>>>());
     }
 
     // Util mean: f32
-    size += mem::size_of::<f32>();
+    size = size.saturating_add(mem::size_of::<f32>());
 
     // UMS vector: Vec<f32> with 512 elements (Phase 7)
-    size += entry.ums_vector.len() * mem::size_of::<f32>();
-    size += mem::size_of::<Vec<f32>>(); // Vec overhead
+    let ums_size = entry.ums_vector.len().saturating_mul(mem::size_of::<f32>());
+    size = size.saturating_add(ums_size);
+    size = size.saturating_add(mem::size_of::<Vec<f32>>()); // Vec overhead
 
     // Hue category: usize (Phase 7)
-    size += mem::size_of::<usize>();
+    size = size.saturating_add(mem::size_of::<usize>());
 
     size
 }

@@ -700,7 +700,7 @@ impl SimpleDreamPool {
                 None => break,
             };
 
-            evicted_count += 1;
+            evicted_count = evicted_count.saturating_add(1);
 
             if let Some(ref mut budget) = self.memory_budget {
                 let old_size = estimate_entry_size(&old_entry);
@@ -739,7 +739,8 @@ impl SimpleDreamPool {
                 let mut eviction_count = budget.calculate_eviction_count(avg_entry_size);
 
                 if !budget.can_add(entry_size) && avg_entry_size > 0 {
-                    let additional = (entry_size + avg_entry_size - 1) / avg_entry_size;
+                    let numerator = entry_size.saturating_add(avg_entry_size).saturating_sub(1);
+                    let additional = numerator / avg_entry_size;
                     eviction_count = eviction_count.max(additional);
                 }
 
