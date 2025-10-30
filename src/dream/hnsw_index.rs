@@ -176,17 +176,35 @@ impl<'a> HnswIndex<'a> {
             ));
         }
 
-        let internal_id = self.embeddings.len() as u32;
-        self.id_map.insert(id, internal_id);
-        self.id_slots.push(Some(id));
-
-        // Store embedding for future rebuilds and immediate insertions.
-        self.embeddings.push(Some(embedding));
-        let stored = self
+        let (internal_id, stored) = if let Some((slot_idx, slot)) = self
             .embeddings
-            .last()
-            .and_then(|maybe| maybe.as_ref())
-            .expect("embedding just pushed must exist");
+            .iter_mut()
+            .enumerate()
+            .find(|(_, maybe)| maybe.is_none())
+        {
+            self.id_slots
+                .get_mut(slot_idx)
+                .map(|slot_entry| *slot_entry = Some(id));
+            *slot = Some(embedding);
+            let stored = slot
+                .as_ref()
+                .expect("embedding must be present after insertion");
+            let internal_id = slot_idx as u32;
+            self.ghost_metrics.remove(&internal_id);
+            (internal_id, stored)
+        } else {
+            let internal_id = self.embeddings.len() as u32;
+            self.id_slots.push(Some(id));
+            self.embeddings.push(Some(embedding));
+            let stored = self
+                .embeddings
+                .last()
+                .and_then(|maybe| maybe.as_ref())
+                .expect("embedding just pushed must exist");
+            (internal_id, stored)
+        };
+
+        self.id_map.insert(id, internal_id);
 
         if let Some(index) = self.hnsw_cosine.as_ref() {
             index.insert((stored.as_slice(), internal_id as usize));

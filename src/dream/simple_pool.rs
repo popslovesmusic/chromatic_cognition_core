@@ -4,17 +4,23 @@
 //! It stores ChromaticTensor dreams with their evaluation metrics and provides
 //! retrieval based on chromatic signature similarity.
 
+use crate::bridge::{encode_to_ums, ModalityMapper};
+use crate::config::{
+    BridgeBaseConfig, BridgeConfig, BridgeReversibilityConfig, BridgeSpectralConfig,
+};
 use crate::data::ColorClass;
-use crate::tensor::ChromaticTensor;
-use crate::solver::SolverResult;
-use crate::dream::soft_index::{SoftIndex, EntryId, Similarity};
-use crate::dream::hnsw_index::HnswIndex;
 use crate::dream::embedding::{EmbeddingMapper, QuerySignature};
+use crate::dream::error::{DreamError, DreamResult};
+use crate::dream::hnsw_index::HnswIndex;
 use crate::dream::hybrid_scoring::{rerank_hybrid, RetrievalWeights};
 use crate::dream::memory::{estimate_entry_size, MemoryBudget};
 use crate::dream::query_cache::QueryCache;
+use crate::dream::soft_index::{EntryId, Similarity, SoftIndex};
+use crate::solver::SolverResult;
 use crate::spectral::{extract_spectral_features, SpectralFeatures, WindowFunction};
-use std::collections::{VecDeque, HashMap};
+use crate::tensor::ChromaticTensor;
+use std::cmp::Ordering;
+use std::collections::{HashMap, VecDeque};
 use std::time::SystemTime;
 
 /// A stored dream entry with tensor and evaluation metrics
@@ -126,7 +132,7 @@ impl Default for PoolConfig {
             max_size: 1000,
             coherence_threshold: 0.75,
             retrieval_limit: 3,
-            use_hnsw: true, // Default to HNSW for better scalability
+            use_hnsw: true,              // Default to HNSW for better scalability
             memory_budget_mb: Some(500), // Default 500 MB limit
         }
     }
@@ -161,6 +167,7 @@ impl Default for PoolConfig {
 pub struct SimpleDreamPool {
     entries: VecDeque<DreamEntry>,
     config: PoolConfig,
+    modality_mapper: ModalityMapper,
     /// Phase 4: Soft index for semantic retrieval (linear O(n) search)
     soft_index: Option<SoftIndex>,
     /// Phase 4 Optimization: HNSW index for scalable retrieval (O(log n) search)
@@ -188,10 +195,12 @@ impl SimpleDreamPool {
             }
             budget
         });
+        let modality_mapper = Self::default_modality_mapper();
 
         Self {
             entries: VecDeque::with_capacity(max_size),
             config,
+            modality_mapper,
             soft_index: None,
             hnsw_index: None,
             id_to_entry: HashMap::new(),
@@ -200,6 +209,140 @@ impl SimpleDreamPool {
             memory_budget,
             evictions_since_rebuild: 0,
         }
+    }
+
+    fn default_modality_mapper() -> ModalityMapper {
+        let bridge_config = BridgeConfig::from_str(include_str!("../../config/bridge.toml"))
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    "Failed to load bridge configuration for modality mapper; falling back to defaults: {}",
+                    err
+                );
+                BridgeConfig {
+                    base: BridgeBaseConfig {
+                        f_min: 110.0,
+                        octaves: 7.0,
+                        gamma: 1.0,
+                        sample_rate: 44_100,
+                    },
+                    spectral: BridgeSpectralConfig {
+                        fft_size: 4096,
+                        accum_format: "Q16.48".to_string(),
+                        reduction_mode: "pairwise_neumaier".to_string(),
+                        categorical_count: 12,
+                    },
+                    reversibility: BridgeReversibilityConfig {
+                        delta_e_tolerance: 0.001,
+                    },
+                }
+            });
+
+        ModalityMapper::new(bridge_config)
+    }
+
+    fn attach_semantic_embedding(&self, entry: &mut DreamEntry) -> Vec<f32> {
+        let ums = encode_to_ums(&self.modality_mapper, &entry.tensor);
+        let embedding = ums.components().to_vec();
+        entry.embed = Some(embedding.clone());
+        embedding
+    }
+
+    fn rebuild_semantic_index_internal(&mut self) -> DreamResult<()> {
+        if self.entries.is_empty() {
+            self.hnsw_index = None;
+            return Ok(());
+        }
+
+        let dim = self
+            .entries
+            .front()
+            .and_then(|entry| entry.embed.as_ref().map(|vec| vec.len()))
+            .or_else(|| {
+                self.entries.front().map(|entry| {
+                    encode_to_ums(&self.modality_mapper, &entry.tensor)
+                        .components()
+                        .len()
+                })
+            })
+            .unwrap_or(0);
+
+        if dim == 0 {
+            return Err(DreamError::index_corrupted(
+                "Semantic embedding dimension resolved to zero during HNSW rebuild",
+            ));
+        }
+
+        let mut hnsw = HnswIndex::new(dim, self.entries.len());
+
+        for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter()) {
+            let vector = entry.embed.as_ref().cloned().unwrap_or_else(|| {
+                encode_to_ums(&self.modality_mapper, &entry.tensor)
+                    .components()
+                    .to_vec()
+            });
+            hnsw.add(entry_id, vector)?;
+        }
+
+        hnsw.build(Similarity::Cosine)?;
+        self.hnsw_index = Some(hnsw);
+        self.evictions_since_rebuild = 0;
+
+        Ok(())
+    }
+
+    fn cosine_similarity_dense(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if norm_a == 0.0 || norm_b == 0.0 {
+            0.0
+        } else {
+            dot / (norm_a * norm_b)
+        }
+    }
+
+    fn filter_active_results(&self, hits: Vec<(EntryId, f32)>, k: usize) -> Vec<EntryId> {
+        hits.into_iter()
+            .filter_map(|(id, _)| self.id_to_entry.contains_key(&id).then_some(id))
+            .take(k)
+            .collect()
+    }
+
+    fn linear_semantic_search(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+    ) -> DreamResult<Vec<EntryId>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut scored: Vec<(EntryId, f32)> = Vec::with_capacity(self.entry_ids.len());
+
+        for entry_id in self.entry_ids.iter().copied() {
+            if let Some(entry) = self.id_to_entry.get(&entry_id) {
+                let candidate = entry.embed.as_ref().cloned().unwrap_or_else(|| {
+                    encode_to_ums(&self.modality_mapper, &entry.tensor)
+                        .components()
+                        .to_vec()
+                });
+
+                if candidate.len() != query_embedding.len() {
+                    return Err(DreamError::dimension_mismatch(
+                        query_embedding.len(),
+                        candidate.len(),
+                        "linear semantic search",
+                    ));
+                }
+
+                let score = Self::cosine_similarity_dense(query_embedding, &candidate);
+                scored.push((entry_id, score));
+            }
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        Ok(scored.into_iter().take(k).map(|(id, _)| id).collect())
     }
 
     /// Evict up to `count` entries from the front of the pool while keeping all
@@ -241,14 +384,14 @@ impl SimpleDreamPool {
         }
 
         if evicted_count > 0 {
-            self.evictions_since_rebuild = self
-                .evictions_since_rebuild
-                .saturating_add(evicted_count);
+            self.evictions_since_rebuild =
+                self.evictions_since_rebuild.saturating_add(evicted_count);
             self.maybe_invalidate_indices();
         }
     }
 
-    fn internal_add(&mut self, entry: DreamEntry, entry_size: usize) -> bool {
+    fn internal_add(&mut self, entry: DreamEntry, embedding: Vec<f32>) -> bool {
+        let entry_size = estimate_entry_size(&entry);
         let initial_evictions = if let Some(budget) = self.memory_budget.as_ref() {
             let needs_space = !budget.can_add(entry_size) || budget.needs_eviction();
             if needs_space {
@@ -265,7 +408,11 @@ impl SimpleDreamPool {
                     eviction_count = eviction_count.max(additional);
                 }
 
-                if eviction_count == 0 { 1 } else { eviction_count }
+                if eviction_count == 0 {
+                    1
+                } else {
+                    eviction_count
+                }
             } else {
                 0
             }
@@ -306,6 +453,15 @@ impl SimpleDreamPool {
             budget.add_entry(entry_size);
         }
 
+        if let Some(hnsw) = self.hnsw_index.as_mut() {
+            if let Err(err) = hnsw.add(entry_id, embedding.clone()) {
+                tracing::warn!(
+                    "Failed to add entry {entry_id:?} to HNSW index; semantic search may require rebuild: {}",
+                    err
+                );
+            }
+        }
+
         self.maybe_invalidate_indices();
 
         true
@@ -342,10 +498,10 @@ impl SimpleDreamPool {
             return false;
         }
 
-        let entry = DreamEntry::new(tensor, result);
-        let entry_size = estimate_entry_size(&entry);
+        let mut entry = DreamEntry::new(tensor, result);
+        let embedding = self.attach_semantic_embedding(&mut entry);
 
-        self.internal_add(entry, entry_size)
+        self.internal_add(entry, embedding)
     }
 
     /// Force add a dream entry regardless of coherence threshold
@@ -353,10 +509,10 @@ impl SimpleDreamPool {
     /// Useful for testing or when coherence filtering is not desired.
     /// Respects memory budget and pool capacity limits.
     pub fn add(&mut self, tensor: ChromaticTensor, result: SolverResult) {
-        let entry = DreamEntry::new(tensor, result);
-        let entry_size = estimate_entry_size(&entry);
+        let mut entry = DreamEntry::new(tensor, result);
+        let embedding = self.attach_semantic_embedding(&mut entry);
 
-        let _ = self.internal_add(entry, entry_size);
+        let _ = self.internal_add(entry, embedding);
     }
 
     /// Add a dream entry with class label (Phase 3B)
@@ -378,10 +534,10 @@ impl SimpleDreamPool {
             return false;
         }
 
-        let entry = DreamEntry::with_class(tensor, result, class_label);
-        let entry_size = estimate_entry_size(&entry);
+        let mut entry = DreamEntry::with_class(tensor, result, class_label);
+        let embedding = self.attach_semantic_embedding(&mut entry);
 
-        self.internal_add(entry, entry_size)
+        self.internal_add(entry, embedding)
     }
 
     /// Retrieve K most similar dreams based on cosine similarity of chroma signatures
@@ -514,7 +670,10 @@ impl SimpleDreamPool {
             .entries
             .iter()
             .filter(|entry| {
-                entry.utility.map(|u| u >= utility_threshold).unwrap_or(false)
+                entry
+                    .utility
+                    .map(|u| u >= utility_threshold)
+                    .unwrap_or(false)
             })
             .map(|entry| {
                 let similarity = cosine_similarity(query_signature, &entry.chroma_signature);
@@ -697,71 +856,44 @@ impl SimpleDreamPool {
             }
         }
 
-        // Clear old mappings
-        self.id_to_entry.clear();
-        self.entry_ids.clear();
+        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::with_capacity(self.entries.len());
+        let mut refreshed_map = HashMap::with_capacity(self.entries.len());
 
-        // Encode all entries
-        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::new();
-        for entry in &self.entries {
+        for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter()) {
             let embedding = mapper.encode_entry(entry, bias);
-            let entry_id = EntryId::new_v4();
             embeddings.push((entry_id, embedding));
-
-            self.id_to_entry.insert(entry_id, entry.clone());
-            self.entry_ids.push_back(entry_id);
+            refreshed_map.insert(entry_id, entry.clone());
         }
 
-        if self.config.use_hnsw {
-            // Build HNSW index for O(log n) search
-            let mut hnsw = HnswIndex::new(embed_dim, embeddings.len());
+        self.id_to_entry = refreshed_map;
 
-            // Add all embeddings (build() will construct the graph)
-            let mut ann_error = None;
-            for (id, emb) in &embeddings {
-                if let Err(err) = hnsw.add(*id, emb.clone()) {
-                    tracing::warn!(
-                        "Failed to insert embedding {id:?} into HNSW index; falling back to linear index: {err}"
-                    );
-                    ann_error = Some(err);
-                    break;
-                }
-            }
-
-            if ann_error.is_none() {
-                if let Err(err) = hnsw.build(Similarity::Cosine) {
-                    tracing::warn!("HNSW index build failed; falling back to linear index: {err}");
-                    ann_error = Some(err);
-                } else {
-                    self.hnsw_index = Some(hnsw);
-                    self.soft_index = None; // Clear linear index when using HNSW
-                    self.evictions_since_rebuild = 0;
-                    return;
-                }
-            }
-
-            if let Some(budget) = self.memory_budget.as_mut() {
-                budget.set_ann_overhead_factor(1.0);
-            }
-
-            // Fall through to linear index when ANN construction fails
-            if ann_error.is_some() {
-                tracing::warn!("Falling back to linear retrieval after HNSW construction failure");
-            }
-            self.hnsw_index = None;
-        }
-
-        // Build linear SoftIndex for O(n) search
         let mut index = SoftIndex::new(embed_dim);
-
         for (id, emb) in embeddings {
-            let _ = index.add(id, emb); // Gracefully skip on error
+            if let Err(err) = index.add(id, emb) {
+                tracing::warn!(
+                    "Failed to insert embedding {id:?} into soft index; entry will be skipped: {}",
+                    err
+                );
+            }
         }
 
         index.build();
         self.soft_index = Some(index);
-        self.hnsw_index = None; // Clear HNSW when using linear
         self.evictions_since_rebuild = 0;
+
+        if self.config.use_hnsw {
+            if let Err(err) = self.rebuild_semantic_index_internal() {
+                tracing::warn!(
+                    "Failed to rebuild semantic HNSW index; continuing with linear fallback: {}",
+                    err
+                );
+                if let Some(budget) = self.memory_budget.as_mut() {
+                    budget.set_ann_overhead_factor(1.0);
+                }
+            }
+        } else {
+            self.hnsw_index = None;
+        }
     }
 
     /// Retrieve dreams using soft index with hybrid scoring (Phase 4)
@@ -791,20 +923,8 @@ impl SimpleDreamPool {
         // Encode query (with caching)
         let query_embedding = mapper.encode_query(query, bias);
 
-        // Get initial k-NN from either HNSW or SoftIndex
-        let hits = if let Some(hnsw) = &self.hnsw_index {
-            // Use HNSW for O(log n) search
-            match hnsw.query(&query_embedding, k, mode) {
-                Ok(results) => results,
-                Err(err) => {
-                    tracing::warn!(
-                        "HNSW retrieval failed; returning empty result set: {}",
-                        err
-                    );
-                    Vec::new()
-                }
-            }
-        } else if let Some(index) = &self.soft_index {
+        // Get initial k-NN from either SoftIndex or (dimension-compatible) HNSW
+        let hits = if let Some(index) = &self.soft_index {
             // Fall back to linear SoftIndex
             match index.query(&query_embedding, k, mode) {
                 Ok(results) => results,
@@ -815,6 +935,26 @@ impl SimpleDreamPool {
                     );
                     Vec::new()
                 }
+            }
+        } else if let Some(hnsw) = &self.hnsw_index {
+            if hnsw.dim() == query_embedding.len() {
+                match hnsw.query(&query_embedding, k, mode) {
+                    Ok(results) => results,
+                    Err(err) => {
+                        tracing::warn!(
+                            "HNSW retrieval failed; returning empty result set: {}",
+                            err
+                        );
+                        Vec::new()
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "Skipping HNSW retrieval due to dimension mismatch (index={} query={})",
+                    hnsw.dim(),
+                    query_embedding.len()
+                );
+                Vec::new()
             }
         } else {
             // No index built yet
@@ -829,6 +969,51 @@ impl SimpleDreamPool {
             .into_iter()
             .filter_map(|(id, _score)| self.id_to_entry.get(&id).cloned())
             .collect()
+    }
+
+    pub fn retrieve_semantic(&self, query_tensor: &ChromaticTensor) -> DreamResult<Vec<EntryId>> {
+        if self.entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let limit = self.config.retrieval_limit;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let ums = encode_to_ums(&self.modality_mapper, query_tensor);
+        let query_embedding = ums.components();
+        let k = limit.min(self.entries.len());
+
+        if let Some(hnsw) = &self.hnsw_index {
+            match hnsw.query(query_embedding, k, Similarity::Cosine) {
+                Ok(results) => {
+                    let filtered = self.filter_active_results(results, k);
+                    if !filtered.is_empty() {
+                        return Ok(filtered);
+                    }
+
+                    let err = DreamError::index_corrupted(
+                        "HNSW semantic search returned only inactive nodes",
+                    );
+                    tracing::warn!("{}; falling back to linear semantic search", err);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "HNSW semantic search failed; falling back to linear search: {}",
+                        err
+                    );
+                }
+            }
+        } else {
+            let err = DreamError::index_not_built("semantic HNSW search");
+            tracing::warn!(
+                "HNSW semantic index unavailable; falling back to linear search: {}",
+                err
+            );
+        }
+
+        self.linear_semantic_search(query_embedding, k)
     }
 
     /// Check if any index is built (Phase 4)
@@ -889,15 +1074,15 @@ mod tests {
 
     #[test]
     fn test_pool_add_and_retrieve() {
-        use crate::ChromaticTensor;
         use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
         use serde_json::json;
 
         let config = PoolConfig {
             max_size: 5,
             coherence_threshold: 0.5,
             retrieval_limit: 3,
-            use_hnsw: false, // Use linear index for simple tests
+            use_hnsw: false,        // Use linear index for simple tests
             memory_budget_mb: None, // No memory limit for simple tests
         };
         let mut pool = SimpleDreamPool::new(config);
@@ -923,8 +1108,8 @@ mod tests {
 
     #[test]
     fn test_pool_capacity() {
-        use crate::ChromaticTensor;
         use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
         use serde_json::json;
 
         let config = PoolConfig {
@@ -956,9 +1141,9 @@ mod tests {
 
     #[test]
     fn test_class_aware_retrieval() {
-        use crate::ChromaticTensor;
         use crate::data::ColorClass;
         use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
         use serde_json::json;
 
         let config = PoolConfig {
@@ -1003,19 +1188,23 @@ mod tests {
         let query = [1.0, 0.0, 0.0];
         let red_dreams = pool.retrieve_similar_class(&query, ColorClass::Red, 3);
         assert_eq!(red_dreams.len(), 3);
-        assert!(red_dreams.iter().all(|d| d.class_label == Some(ColorClass::Red)));
+        assert!(red_dreams
+            .iter()
+            .all(|d| d.class_label == Some(ColorClass::Red)));
 
         // Retrieve only Blue class dreams
         let blue_dreams = pool.retrieve_similar_class(&query, ColorClass::Blue, 3);
         assert_eq!(blue_dreams.len(), 3);
-        assert!(blue_dreams.iter().all(|d| d.class_label == Some(ColorClass::Blue)));
+        assert!(blue_dreams
+            .iter()
+            .all(|d| d.class_label == Some(ColorClass::Blue)));
     }
 
     #[test]
     fn test_balanced_retrieval() {
-        use crate::ChromaticTensor;
         use crate::data::ColorClass;
         use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
         use serde_json::json;
 
         let config = PoolConfig::default();
@@ -1069,9 +1258,18 @@ mod tests {
         assert_eq!(balanced.len(), 6); // 2 * 3 classes
 
         // Count per class
-        let red_count = balanced.iter().filter(|d| d.class_label == Some(ColorClass::Red)).count();
-        let green_count = balanced.iter().filter(|d| d.class_label == Some(ColorClass::Green)).count();
-        let blue_count = balanced.iter().filter(|d| d.class_label == Some(ColorClass::Blue)).count();
+        let red_count = balanced
+            .iter()
+            .filter(|d| d.class_label == Some(ColorClass::Red))
+            .count();
+        let green_count = balanced
+            .iter()
+            .filter(|d| d.class_label == Some(ColorClass::Green))
+            .count();
+        let blue_count = balanced
+            .iter()
+            .filter(|d| d.class_label == Some(ColorClass::Blue))
+            .count();
 
         assert_eq!(red_count, 2);
         assert_eq!(green_count, 2);
@@ -1080,8 +1278,8 @@ mod tests {
 
     #[test]
     fn test_utility_retrieval() {
-        use crate::ChromaticTensor;
         use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
         use serde_json::json;
 
         let config = PoolConfig {
