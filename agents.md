@@ -1,35 +1,60 @@
-# Phase 3: Archive Finalization (Retrieval)
+# AGENTS.MD: Chromatic Cognition Core - Project Blueprint
 
-## 🎯 Goal
-Implement the core mission of the Chromatic Semantic Archive (CSA): provide reliable, low-latency Semantic Retrieval by stabilizing the HNSW index and integrating the search function.
+## Project Mission
+To maintain a **Deterministic, Memory-Constrained Archive of High-Coherence Chromatic Tensors** (the Chromatic Semantic Archive - CSA) that facilitates **Low-Latency Semantic Retrieval** for a large language model that processes code based on color and sound patterns.
 
----
-
-### Subphase 3.A: HNSW Index Stabilization
-
-**Focus:** Modifying the HNSW index to support efficient incremental updates, avoiding unnecessary full rebuilds.
-
-1.  **Implement HNSW Incremental Add:** Modify the `HnswIndex::add()` function (or an equivalent entry point) to support **true incremental insertion**. The HNSW library should be used to add the new embedding directly to the existing graph structure without forcing the complete destruction and rebuild of the index. This is a fundamental change from the design flaw identified earlier.
-2.  **Fix HNSW Ghost Nodes:** Review the logic within `evict_n_entries` or an associated HNSW handler to ensure that when an entry is evicted, its corresponding node is correctly **removed or marked as deleted** within the HNSW graph structure itself (if the library supports it, otherwise, ensure the index is aware of the deletion).
+## General Agent Instructions
+1.  **Prioritize Determinism:** All mathematical operations, especially those related to the Spectral Bridge, UMS, and fixed-point math, must be bit-stable and immune to floating-point variance (e.g., use saturating or compensated arithmetic).
+2.  **Enforce Separation of Concerns (SoC):** Logic must reside in the correct module (e.g., memory limits in `MemoryBudget`, retrieval structure in `HnswIndex`, and core decisions in `SimpleDreamPool`).
+3.  **Validate Performance:** Implement the $\text{HNSW/linear}$ auto-scaling logic and maintain the $\text{FINAL\_BASELINE}$ benchmark results.
+4.  **Target Architecture:** 3×12×12×3\mathbf{3 \times 12 \times 12 \times 3}3×12×12×3 processing unit.
+5.  **Quality Gate:** Every UMS round-trip must pass $\mathbf{\Delta E_{94} \le 1.0 \times 10^{-3}}$.
 
 ---
 
-### Subphase 3.B: Semantic Retrieval Implementation
+## Phase History and Specification Details
 
-**Focus:** Implementing the primary function for low-latency similarity search.
+### Phase 1: Structural Foundation & Bug Fixes (Completed)
+**Goal:** Stabilize core infrastructure and fix critical architectural debt.
+| Subphase | Focus | General Instruction |
+| :--- | :--- | :--- |
+| **1.A** | Structural Alignment | Canonicalize the tensor size to $\mathbf{[3, 12, 12, 3]}$ and update all memory size calculations. |
+| **1.B** | Logic Unification | Refactor `SimpleDreamPool` to use a single, private $\mathbf{\text{internal\_add}}$ helper to eliminate code duplication. |
+| **1.C** | Index Stabilization | Implement the 10%ChurnThreshold\mathbf{10\% Churn Threshold}10%ChurnThreshold to prevent index thrashing and restore retrieval performance. |
 
-1.  **Implement Retrieval Function:** Create the primary retrieval function, e.g., `fn retrieve_semantic(&self, query_tensor: &ChromaticTensor) -> DreamResult<Vec<EntryId>>` within the `SimpleDreamPool` or a new `CSA` façade.
-2.  **Query Path:** This function must deterministically route the query:
-    * **Tensor $\rightarrow$ UMS:** Convert the input `query_tensor` into a normalized **UMS Vector**.
-    * **UMS $\rightarrow$ HNSW Search:** Use the UMS vector to query the HNSW index for the **top-K** most similar archived entries.
-    * **Fallback:** Implement a deterministic fallback to the linear index if the HNSW index is unavailable or fails, logging the failure as a **DreamError**.
-3.  **Result Filtering:** Ensure the returned results (which are `EntryId`s) are filtered against the pool's internal `id_to_entry` map to prevent returning **"ghost nodes"** or entries that were recently evicted.
+### Phase 2: Cognitive Integration (UMS Data Flow) (Completed)
+**Goal:** Finalize the deterministic encoding path to the UnifiedModalitySpace(UMS)Unified Modality Space (UMS)UnifiedModalitySpace(UMS).
+| Subphase | Focus | General Instruction |
+| :--- | :--- | :--- |
+| **2.A** | Token-to-Category Mapping | Implement the 12−categoryNearestNeighbor\mathbf{12-category Nearest Neighbor}12−categoryNearestNeighbor logic on the circular Hue manifold. |
+| **2.B** | Full UMS Encoding | Project spectral features, HSL, and affective parameters into the 512DUMS\mathbf{512D UMS}512DUMS vector and apply μ/σ\mathbf{\mu}/\mathbf{\sigma}μ/σ normalization. |
+| **2.C** | UMS Decoding & Reversibility | Implement the inverse UMS transformation and verify the final $\mathbf{\Delta E_{94}}$ round-trip fidelity test. |
+
+### Phase 3: Archive Finalization (Retrieval) (Completed)
+**Goal:** Implement the primary retrieval methods for the $\text{Chromatic Semantic Archive (CSA)}$.
+| Subphase | Focus | General Instruction |
+| :--- | :--- | :--- |
+| **3.A** | HNSW Stabilization | Finalize $\text{HnswIndex}$ to support safe **incremental updates** and track evicted nodes (ghosts). |
+| **3.B** | Semantic Retrieval | Implement $\mathbf{\text{retrieve\_semantic}}withdeterministicwith deterministicwithdeterministic\text{HNSW}/\text{linear}$ fallback logic. |
+| **3.C** | Project Alignment | Finalize PoolConfig\text{PoolConfig}PoolConfig defaults (HNSWopt−in\mathbf{\text{HNSW}  opt-in}HNSWopt−in) and verify SeparationofConcerns(SoC)Separation of Concerns (SoC)SeparationofConcerns(SoC). |
+
+### Phase 4: Final Audit and Baseline (Completed)
+**Goal:** Certify research completeness and establish performance metrics.
+| Subphase | Focus | General Instruction |
+| :--- | :--- | :--- |
+| **4.A** | Execute Benchmark Suite | Run cargobenchcargo benchcargobench to establish the $\mathbf{\text{FINAL\_BASELINE}}$ and verify the $\text{HNSW/linear}$ crossover point. |
+| **4.B** | Integration Tests | Add final integration tests to assert $\mathbf{\text{10\% Churn Threshold}}$ behavior and stability. |
+| **4.C** | Documentation | Update $\text{ARCHITECTURE.md}$ and $\text{README.md}$ to reflect the final project status. |
 
 ---
 
-### Subphase 3.C: Final Audit and Project Alignment
-
-**Focus:** Finalizing documentation and ensuring the system is configured for the mission.
-
-1.  **Documentation Update:** Update the internal documentation (e.g., in `PoolConfig`) to reflect the **Hybrid Approach (Option C)**: the default setting should be `use_hnsw: false` (Linear Index), making the optimization **opt-in**.
-2.  **Project Alignment:** Add documentation to the relevant module (e.g., `HnswIndex`) outlining **"When to use HNSW"**: specifically, when the pool size is $\mathbf{>5000}$ entries or when query latency must be $\mathbf{<100}$ milliseconds.
+### Phase 8: Production Readiness & Deployment (Current Focus)
+**Goal:** Hardening the system for operational stability and long-term deployment.
+| Priority | Focus | General Instruction |
+| :--- | :--- | :--- |
+| **1.1** | Checkpointing API | Implement a $\mathbf{\text{Checkpointable}}$ trait for $\text{Network}$ and $\text{Pool}$ using a deterministic serialization format (e.g., $\text{bincode}$). |
+| **1.2** | Memory Safety Audit | Audit all $\text{usize}$ memory calculations, enforcing **saturating arithmetic** and $\text{zero-value}$ guardrails to prevent runtime panics. |
+| **2.1** | Parallelization | Implement $\text{rayon}$-based **batch parallelization** for $\text{UMS}$ encoding/decoding. |
+| **2.2** | Data Compression | Implement $\mathbf{\text{f16} \text{ quantization}}$ or $\text{bincode}$ compression for the archived $\text{UMS}$ vectors to save memory. |
+| **2.3** | Auto-Scaling | Implement $\text{HNSW/linear}$ auto-scaling based on $\text{pool.len()}$ crossover point ($\approx \text{3000 \ entries}$). |
+| **3.2** | Dockerization | Create a $\text{Dockerfile}$ and $\text{docker-compose}$ configuration for consistent deployment. |

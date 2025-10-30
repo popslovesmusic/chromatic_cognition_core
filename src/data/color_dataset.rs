@@ -5,12 +5,13 @@
 
 use crate::tensor::ChromaticTensor;
 use ndarray::Array4;
+use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
-use rand::rngs::StdRng;
+use serde::{Deserialize, Serialize};
 
 /// 10 standard color classes for classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(usize)]
 pub enum ColorClass {
     Red = 0,
@@ -82,14 +83,14 @@ impl ColorClass {
 }
 
 /// A single training/validation sample
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ColorSample {
     pub tensor: ChromaticTensor,
     pub label: ColorClass,
 }
 
 /// Configuration for dataset generation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetConfig {
     /// Tensor dimensions (rows, cols, layers)
     pub tensor_size: (usize, usize, usize),
@@ -139,7 +140,8 @@ impl ColorDataset {
                         for l in 0..layers {
                             // Base color + Gaussian noise
                             for channel in 0..3 {
-                                let noise = rng.gen::<f32>() * config.noise_level * 2.0 - config.noise_level;
+                                let noise = rng.gen::<f32>() * config.noise_level * 2.0
+                                    - config.noise_level;
                                 let value = (base_rgb[channel] + noise).clamp(0.0, 1.0);
                                 colors[[r, c, l, channel]] = value;
                             }

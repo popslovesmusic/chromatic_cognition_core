@@ -12,12 +12,13 @@ use super::accumulate::{deterministic_mean, deterministic_sum};
 use crate::tensor::ChromaticTensor;
 use ndarray::Array2;
 use rustfft::{num_complex::Complex, FftPlanner};
+use serde::{Deserialize, Serialize};
 use std::f32::consts::PI;
 
 /// Window function for FFT preprocessing.
 ///
 /// Windowing reduces spectral leakage by smoothly tapering the signal at edges.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum WindowFunction {
     /// No windowing (rectangular)
     None,
@@ -51,7 +52,7 @@ impl WindowFunction {
 /// Spectral features extracted from a chromatic tensor.
 ///
 /// Contains frequency-domain statistics computed via FFT.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpectralFeatures {
     /// Spectral entropy (0-1, higher = more complex frequency distribution)
     ///

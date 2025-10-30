@@ -3,7 +3,7 @@ use std::ops::{Add, Sub};
 
 use ndarray::{Array3, Array4, Axis};
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A 4-dimensional chromatic tensor representing an RGB color field with certainty weights.
 ///
@@ -24,7 +24,7 @@ use serde::Serialize;
 /// println!("Mean RGB: {:?}", stats.mean_rgb);
 /// println!("Variance: {}", stats.variance);
 /// ```
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChromaticTensor {
     /// RGB color values as a 4D array: [rows, cols, layers, 3]
     pub colors: Array4<f32>,

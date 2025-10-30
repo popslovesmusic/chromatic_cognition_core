@@ -2,15 +2,15 @@
 ///
 /// This module provides a trait-based interface for evaluating chromatic tensor fields
 /// and computing metrics like energy, coherence, and constraint violations.
-
 pub mod native;
 
 use crate::tensor::ChromaticTensor;
-use serde_json::Value;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Result of evaluating a chromatic field
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverResult {
     /// Total field energy (lower is better)
     /// Combines smoothness (total variation) and saturation penalties

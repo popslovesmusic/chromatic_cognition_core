@@ -5,6 +5,7 @@
 //! retrieval based on chromatic signature similarity.
 
 use crate::bridge::{encode_to_ums, ModalityMapper};
+use crate::checkpoint::{CheckpointError, Checkpointable};
 use crate::config::{
     BridgeBaseConfig, BridgeConfig, BridgeReversibilityConfig, BridgeSpectralConfig,
 };
@@ -19,16 +20,27 @@ use crate::dream::soft_index::{EntryId, Similarity, SoftIndex};
 use crate::solver::SolverResult;
 use crate::spectral::{extract_spectral_features, SpectralFeatures, WindowFunction};
 use crate::tensor::ChromaticTensor;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::time::SystemTime;
+
+const POOL_CHECKPOINT_VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct SimpleDreamPoolCheckpoint {
+    version: u32,
+    config: PoolConfig,
+    entries: Vec<DreamEntry>,
+    entry_ids: Vec<EntryId>,
+}
 
 /// A stored dream entry with tensor and evaluation metrics
 ///
 /// Enhanced for Phase 3B with class awareness, utility tracking, and timestamps
 /// Enhanced for Phase 4 with spectral features and embeddings
 /// Enhanced for Phase 7 (Phase 2 Cognitive Integration) with UMS vector
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DreamEntry {
     pub tensor: ChromaticTensor,
     pub result: SolverResult,
@@ -208,7 +220,7 @@ impl DreamEntry {
 }
 
 /// Configuration for SimpleDreamPool
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolConfig {
     /// Maximum number of dreams to store in memory
     pub max_size: usize,
@@ -346,6 +358,79 @@ impl SimpleDreamPool {
         let embedding = ums.components().to_vec();
         entry.embed = Some(embedding.clone());
         embedding
+    }
+
+    fn rebuild_after_restore(&mut self) -> Result<(), CheckpointError> {
+        self.id_to_entry.clear();
+
+        if self.entries.is_empty() {
+            self.soft_index = None;
+            if let Some(index) = self.hnsw_index.as_mut() {
+                index.clear();
+            }
+            self.evictions_since_rebuild = 0;
+            return Ok(());
+        }
+
+        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::with_capacity(self.entries.len());
+        let mut expected_dim: Option<usize> = None;
+
+        for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter_mut()) {
+            let embedding = if let Some(existing) = entry.embed.clone() {
+                existing
+            } else {
+                let ums = encode_to_ums(&self.modality_mapper, &entry.tensor);
+                let generated = ums.components().to_vec();
+                entry.embed = Some(generated.clone());
+                generated
+            };
+
+            if let Some(dim) = expected_dim {
+                if embedding.len() != dim {
+                    return Err(CheckpointError::InvalidFormat(format!(
+                        "Inconsistent embedding dimension for entry {entry_id}"
+                    )));
+                }
+            } else {
+                expected_dim = Some(embedding.len());
+            }
+
+            embeddings.push((entry_id, embedding));
+            self.id_to_entry.insert(entry_id, entry.clone());
+        }
+
+        if let Some(dim) = expected_dim {
+            let mut index = SoftIndex::new(dim);
+            for (id, embedding) in embeddings {
+                index.add(id, embedding)?;
+            }
+            index.build();
+            self.soft_index = Some(index);
+        } else {
+            self.soft_index = None;
+        }
+
+        if self.config.use_hnsw {
+            self.rebuild_semantic_index_internal()?;
+        } else {
+            self.hnsw_index = None;
+        }
+
+        if let Some(mb) = self.config.memory_budget_mb {
+            let mut budget = MemoryBudget::new(mb);
+            if self.config.use_hnsw {
+                budget.set_ann_overhead_factor(2.0);
+            }
+            for entry in self.entries.iter() {
+                budget.add_entry(estimate_entry_size(entry));
+            }
+            self.memory_budget = Some(budget);
+        } else {
+            self.memory_budget = None;
+        }
+
+        self.evictions_since_rebuild = 0;
+        Ok(())
     }
 
     fn rebuild_semantic_index_internal(&mut self) -> DreamResult<()> {
@@ -1200,11 +1285,7 @@ impl SimpleDreamPool {
     /// - Category filtering: O(n) where n = total entries
     /// - UMS ranking: O(m log m) where m = entries in category (~n/12)
     /// - More efficient than full pool search when categories are balanced
-    pub fn retrieve_hybrid(
-        &self,
-        query_tensor: &ChromaticTensor,
-        k: usize,
-    ) -> Vec<DreamEntry> {
+    pub fn retrieve_hybrid(&self, query_tensor: &ChromaticTensor, k: usize) -> Vec<DreamEntry> {
         if self.entries.is_empty() || k == 0 {
             return Vec::new();
         }
@@ -1302,6 +1383,41 @@ impl SimpleDreamPool {
         } else {
             self.soft_index.as_ref().map_or(0, |idx| idx.len())
         }
+    }
+}
+
+impl Checkpointable for SimpleDreamPool {
+    fn save_checkpoint<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), CheckpointError> {
+        let snapshot = SimpleDreamPoolCheckpoint {
+            version: POOL_CHECKPOINT_VERSION,
+            config: self.config.clone(),
+            entries: self.entries.iter().cloned().collect(),
+            entry_ids: self.entry_ids.iter().copied().collect(),
+        };
+
+        Self::write_snapshot(&snapshot, path)
+    }
+
+    fn load_checkpoint<P: AsRef<std::path::Path>>(path: P) -> Result<Self, CheckpointError> {
+        let snapshot: SimpleDreamPoolCheckpoint = Self::read_snapshot(path)?;
+        if snapshot.version != POOL_CHECKPOINT_VERSION {
+            return Err(CheckpointError::VersionMismatch {
+                expected: POOL_CHECKPOINT_VERSION,
+                found: snapshot.version,
+            });
+        }
+
+        if snapshot.entries.len() != snapshot.entry_ids.len() {
+            return Err(CheckpointError::InvalidFormat(
+                "Entry ID list length does not match entries".to_string(),
+            ));
+        }
+
+        let mut pool = SimpleDreamPool::new(snapshot.config);
+        pool.entries = VecDeque::from(snapshot.entries);
+        pool.entry_ids = VecDeque::from(snapshot.entry_ids);
+        pool.rebuild_after_restore()?;
+        Ok(pool)
     }
 }
 

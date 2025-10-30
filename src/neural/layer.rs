@@ -1,10 +1,13 @@
 //! Neural network layer abstractions for chromatic tensors.
 
-use crate::neural::gradient::{backward_complement, backward_filter, backward_mix, backward_saturate};
+use crate::neural::gradient::{
+    backward_complement, backward_filter, backward_mix, backward_saturate,
+};
 use crate::tensor::ChromaticTensor;
+use serde::{Deserialize, Serialize};
 
 /// Type of chromatic operation performed by a layer.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ChromaticOp {
     /// Additive mix operation
     Mix,
@@ -25,6 +28,7 @@ pub enum ChromaticOp {
 /// ```text
 /// input → mix(input, weights) → operation → add(bias) → output
 /// ```
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChromaticLayer {
     /// Learnable weight tensor
     pub weights: ChromaticTensor,
@@ -35,8 +39,10 @@ pub struct ChromaticLayer {
     /// Operation parameter (e.g., saturation alpha)
     pub param: f32,
     /// Cached input for backward pass
+    #[serde(skip)]
     cached_input: Option<ChromaticTensor>,
     /// Cached pre-operation output for backward pass
+    #[serde(skip)]
     cached_pre_op: Option<ChromaticTensor>,
 }
 
@@ -58,13 +64,7 @@ impl ChromaticLayer {
     ///
     /// let layer = ChromaticLayer::new(32, 32, 8, ChromaticOp::Mix, 42);
     /// ```
-    pub fn new(
-        rows: usize,
-        cols: usize,
-        layers: usize,
-        operation: ChromaticOp,
-        seed: u64,
-    ) -> Self {
+    pub fn new(rows: usize, cols: usize, layers: usize, operation: ChromaticOp, seed: u64) -> Self {
         Self {
             weights: ChromaticTensor::from_seed(seed, rows, cols, layers),
             bias: ChromaticTensor::from_seed(seed.wrapping_add(1000), rows, cols, layers),

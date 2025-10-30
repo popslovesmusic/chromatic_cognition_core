@@ -1,13 +1,25 @@
 //! Chromatic neural network architecture.
 
+use crate::checkpoint::{CheckpointError, Checkpointable};
 use crate::neural::layer::{ChromaticLayer, ChromaticOp};
 use crate::neural::loss::{accuracy, cross_entropy_loss};
 use crate::neural::optimizer::SGDOptimizer;
 use crate::tensor::ChromaticTensor;
+use serde::{Deserialize, Serialize};
+
+const NETWORK_CHECKPOINT_VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct ChromaticNetworkCheckpoint {
+    version: u32,
+    layers: Vec<ChromaticLayer>,
+    num_classes: usize,
+}
 
 /// A chromatic neural network for classification.
 ///
 /// Stacks multiple chromatic layers to learn complex color patterns.
+#[derive(Serialize, Deserialize)]
 pub struct ChromaticNetwork {
     layers: Vec<ChromaticLayer>,
     num_classes: usize,
@@ -21,7 +33,10 @@ impl ChromaticNetwork {
     /// * `layers` - Vector of chromatic layers
     /// * `num_classes` - Number of output classes
     pub fn new(layers: Vec<ChromaticLayer>, num_classes: usize) -> Self {
-        Self { layers, num_classes }
+        Self {
+            layers,
+            num_classes,
+        }
     }
 
     /// Creates a simple 2-layer network for experiments.
@@ -34,8 +49,8 @@ impl ChromaticNetwork {
     pub fn simple(input_size: (usize, usize, usize), num_classes: usize, seed: u64) -> Self {
         let (rows, cols, layers) = input_size;
 
-        let layer1 = ChromaticLayer::new(rows, cols, layers, ChromaticOp::Saturate, seed)
-            .with_param(1.2);
+        let layer1 =
+            ChromaticLayer::new(rows, cols, layers, ChromaticOp::Saturate, seed).with_param(1.2);
         let layer2 = ChromaticLayer::new(rows, cols, layers, ChromaticOp::Mix, seed + 1);
 
         Self::new(vec![layer1, layer2], num_classes)
@@ -159,6 +174,33 @@ impl ChromaticNetwork {
 
         let n = inputs.len() as f32;
         (total_loss / n, total_acc / n)
+    }
+}
+
+impl Checkpointable for ChromaticNetwork {
+    fn save_checkpoint<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), CheckpointError> {
+        let snapshot = ChromaticNetworkCheckpoint {
+            version: NETWORK_CHECKPOINT_VERSION,
+            layers: self.layers.clone(),
+            num_classes: self.num_classes,
+        };
+
+        Self::write_snapshot(&snapshot, path)
+    }
+
+    fn load_checkpoint<P: AsRef<std::path::Path>>(path: P) -> Result<Self, CheckpointError> {
+        let snapshot: ChromaticNetworkCheckpoint = Self::read_snapshot(path)?;
+        if snapshot.version != NETWORK_CHECKPOINT_VERSION {
+            return Err(CheckpointError::VersionMismatch {
+                expected: NETWORK_CHECKPOINT_VERSION,
+                found: snapshot.version,
+            });
+        }
+
+        Ok(Self {
+            layers: snapshot.layers,
+            num_classes: snapshot.num_classes,
+        })
     }
 }
 

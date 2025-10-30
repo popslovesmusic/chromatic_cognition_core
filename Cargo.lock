@@ -189,6 +189,7 @@ name = "chromatic_cognition_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "chrono",
  "criterion",
  "hnsw_rs",
