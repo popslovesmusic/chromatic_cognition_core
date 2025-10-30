@@ -60,7 +60,10 @@ fn bench_hnsw_vs_linear(c: &mut Criterion) {
 
         // Build HNSW
         let mut hnsw = HnswIndex::new(64, *size);
-        hnsw.build(&embeddings, Similarity::Cosine);
+        for (id, emb) in &embeddings {
+            hnsw.add(*id, emb.clone()).unwrap();
+        }
+        hnsw.build(Similarity::Cosine).unwrap();
 
         let query: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
 

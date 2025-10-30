@@ -857,6 +857,41 @@ impl SimpleDreamPool {
         self.entries.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn evict_for_test(&mut self, count: usize) {
+        self.evict_n_entries(count);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_soft_index_for_test(&self) -> bool {
+        self.soft_index.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evictions_since_rebuild_for_test(&self) -> usize {
+        self.evictions_since_rebuild
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hnsw_len_for_test(&self) -> Option<usize> {
+        self.hnsw_index.as_ref().map(|idx| idx.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hnsw_built_for_test(&self) -> bool {
+        self.hnsw_index
+            .as_ref()
+            .map(|idx| idx.stats().built)
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hnsw_ghosts_for_test(&self) -> Option<usize> {
+        self.hnsw_index
+            .as_ref()
+            .map(|idx| idx.ghost_count_for_mode_test(Similarity::Cosine))
+    }
+
     /// Clear all stored dreams
     pub fn clear(&mut self) {
         self.entries.clear();

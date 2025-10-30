@@ -26,6 +26,27 @@ Chromatic Cognition Core is a deterministic Rust engine that represents cognitio
 └─────────┘  └───────────┘  └─────────┘  └────────────┘
 ```
 
+## Chromatic Semantic Archive Layout
+
+The Chromatic Semantic Archive (CSA) is partitioned into a deterministic **3 × 12 × 12 × 3 processing unit**:
+
+- **3 spectral stacks** capture low-, mid-, and high-frequency energy in the unified modality space (UMS).
+- **12 hue categories** per stack align with the mapper's discrete color wheel, guaranteeing deterministic routing for
+  retrieval.
+- **12 modulation slots** per category preserve recent temporal slices without overlap, enabling fast churn recovery.
+- **3 channel features** (RGB) are retained for each slot so the CSA can reconstruct chromatic tensors directly from archive
+  state.
+
+This organization mirrors the structure produced by `ModalityMapper::new`, ensuring that UMS encoders, the HNSW index, and
+category-aware retrieval (`retrieve_hybrid`) operate on the same fixed lattice.
+
+### Index Management Strategy
+
+CSA stability relies on a churn-aware rebuild policy. The dream pool tracks evictions since the last rebuild and invalidates the
+active indexes when churn exceeds **10% of the current entry count**. Light churn (<10%) leaves the HNSW graph intact while
+marking ghost nodes, whereas heavy churn triggers `rebuild_active()` to regenerate the ANN graph and drops the linear fallback
+index. This mechanism bounds rebuild costs while guaranteeing that stale nodes never exceed the configured safety margin.
+
 ## Module Breakdown
 
 ### 1. Tensor Module (`src/tensor/`)

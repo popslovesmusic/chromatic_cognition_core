@@ -209,6 +209,112 @@ fn test_error_recovery_on_index_failure() {
     assert!(results.len() <= 5);
 }
 
+    fn build_hnsw_pool(entry_count: usize) -> SimpleDreamPool {
+        let config = PoolConfig {
+            max_size: entry_count + 100,
+            coherence_threshold: 0.0,
+            retrieval_limit: 16,
+            use_hnsw: true,
+            memory_budget_mb: None,
+        };
+
+        let mut pool = SimpleDreamPool::new(config);
+
+        for seed in 0..entry_count {
+            let tensor = ChromaticTensor::from_seed(seed as u64 + 1, 8, 8, 3);
+            let result = SolverResult {
+                energy: 0.05,
+                coherence: 0.9,
+                violation: 0.01,
+                grad: None,
+                mask: None,
+                meta: json!({ "seed": seed }),
+            };
+            pool.add(tensor, result);
+        }
+
+        let mapper = EmbeddingMapper::new(64);
+        pool.rebuild_soft_index(&mapper, None);
+
+        assert!(pool.hnsw_built_for_test(), "HNSW index should be constructed for tests");
+        assert_eq!(
+            pool.evictions_since_rebuild_for_test(),
+            0,
+            "Eviction counter should reset after rebuild",
+        );
+
+        assert_eq!(
+            pool.hnsw_ghosts_for_test()
+                .expect("HNSW index must be available after rebuild"),
+            0,
+            "Freshly rebuilt index should not contain ghost nodes",
+        );
+
+        pool
+    }
+
+    #[test]
+    fn test_index_survives_light_eviction() {
+        let mut pool = build_hnsw_pool(500);
+
+        pool.evict_for_test(5);
+
+        assert_eq!(pool.len(), 495, "Pool should remove only the requested entries");
+        assert!(
+            pool.has_soft_index_for_test(),
+            "Linear index should remain after light churn",
+        );
+        assert_eq!(
+            pool.evictions_since_rebuild_for_test(),
+            5,
+            "Eviction counter should reflect light churn",
+        );
+
+        assert!(pool.hnsw_built_for_test(), "HNSW graph should remain available");
+        assert_eq!(
+            pool.hnsw_len_for_test().expect("HNSW index should persist"),
+            495,
+            "HNSW id map should match pool size",
+        );
+        assert_eq!(
+            pool.hnsw_ghosts_for_test()
+                .expect("HNSW index should persist after light churn"),
+            5,
+            "Light churn should leave ghost nodes without forcing rebuild",
+        );
+    }
+
+    #[test]
+    fn test_index_invalidates_after_heavy_churn() {
+        let mut pool = build_hnsw_pool(500);
+
+        pool.evict_for_test(60);
+
+        assert_eq!(pool.len(), 440, "Pool should evict requested number of entries");
+        assert!(
+            !pool.has_soft_index_for_test(),
+            "Heavy churn should drop the linear index",
+        );
+        assert_eq!(
+            pool.evictions_since_rebuild_for_test(),
+            0,
+            "Eviction counter resets after rebuild",
+        );
+
+        assert!(pool.hnsw_built_for_test(), "Rebuilt HNSW graph should be marked as available");
+        assert_eq!(
+            pool.hnsw_len_for_test().expect("HNSW index should be present"),
+            440,
+            "Rebuilt graph should only contain active entries",
+        );
+        assert_eq!(
+            pool.hnsw_ghosts_for_test()
+                .expect("HNSW index should be present after rebuild"),
+            0,
+            "Rebuild should clear ghost nodes introduced by heavy churn",
+        );
+    }
+
 /// Test concurrent access patterns (basic safety check)
 #[test]
 fn test_concurrent_reads() {

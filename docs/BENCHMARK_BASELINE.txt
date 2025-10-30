@@ -1,0 +1,33 @@
+Chromatic Semantic Archive Benchmark Baseline (FINAL_BASELINE)
+=============================================================
+Command: `cargo bench --bench dream_benchmarks -- --save-baseline FINAL_BASELINE`
+
+## k-NN Retrieval Performance (k = 10, cosine similarity)
+| Entries | Linear Scan (µs) | HNSW (µs) | Observations |
+|---------|------------------|-----------|--------------|
+| 100     | 4.80             | 21.04     | Linear scan dominates at small pool sizes |
+| 500     | 23.65            | 15.24     | HNSW overtakes linear search |
+| 1,000   | 51.04            | 15.92     | HNSW maintains ~3.2× speedup |
+| 5,000   | 311.56           | 18.16     | HNSW delivers >17× speedup |
+
+**HNSW vs. Linear crossover point:**
+Linear latency scales at ≈0.047 µs per entry. Equating this to the 21.0 µs HNSW latency
+observed at 100 entries places the crossover near **440 entries**. Practical runs show
+HNSW outperforming linear search once the archive exceeds 500 active dreams.
+
+## Diversity and Retrieval Pipelines
+- MMR standard (k = 10/20/50): 19.19 µs, 63.92 µs, 284.30 µs
+- MMR fast (k = 10/20/50, sampling=5): 22.15 µs, 50.96 µs, 122.55 µs
+- Hybrid full pipeline (retrieve + rerank): 16.70 µs per query
+
+## Embedding and Spectral Costs
+- Spectral feature extraction: 63.16 µs
+- Entry encoding: 458 ns
+- Query encoding: 464 ns
+
+## Memory Budget Operations
+- `memory_add_entry`: 8.80 ns
+- `memory_needs_eviction`: 5.95 ns
+
+Baseline artifacts are stored under `target/criterion/FINAL_BASELINE/` for regression
+tracking.

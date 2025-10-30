@@ -50,6 +50,52 @@ cargo test
 
 See [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) for the latest recorded results, environment details, and reproduction steps.
 
+### Hybrid Semantic Retrieval
+
+The Chromatic Semantic Archive exposes low-latency retrieval via `SimpleDreamPool::retrieve_hybrid`. This API combines the hue
+category filter with UMS similarity ranking and relies on an HNSW index for production workloads.
+
+```rust
+use chromatic_cognition_core::dream::{EmbeddingMapper, PoolConfig, SimpleDreamPool};
+use chromatic_cognition_core::tensor::ChromaticTensor;
+use chromatic_cognition_core::solver::SolverResult;
+use serde_json::json;
+
+// Configure the pool to enable HNSW search and store up to 1,024 dreams
+let config = PoolConfig {
+    max_size: 1_024,
+    coherence_threshold: 0.75,
+    retrieval_limit: 8,
+    use_hnsw: true,
+    memory_budget_mb: None,
+};
+
+let mut pool = SimpleDreamPool::new(config);
+
+// Insert a coherent dream and build the semantic index
+let tensor = ChromaticTensor::from_seed(42, 8, 8, 3);
+let result = SolverResult {
+    energy: 0.1,
+    coherence: 0.9,
+    violation: 0.02,
+    grad: None,
+    mask: None,
+    meta: json!({}),
+};
+pool.add_if_coherent(tensor, result);
+
+let mapper = EmbeddingMapper::new(64);
+pool.rebuild_soft_index(&mapper, None);
+
+// Issue a hybrid retrieval request for the top 5 category-aligned entries
+let query = ChromaticTensor::from_seed(99, 8, 8, 3);
+let results = pool.retrieve_hybrid(&query, 5);
+assert!(results.len() <= 5);
+```
+
+The pool automatically routes semantic queries through the HNSW index (with a linear fallback) and filters inactive entries,
+making `retrieve_hybrid` the preferred interface for CSA retrieval workflows.
+
 ## Architecture
 
 ### Core Types
