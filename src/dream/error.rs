@@ -49,6 +49,9 @@ pub enum DreamError {
 
     /// Operation requires a feature that is not available
     FeatureUnavailable { feature: String, reason: String },
+
+    /// Critical system state detected; restart required
+    CriticalState { context: String, details: String },
 }
 
 impl fmt::Display for DreamError {
@@ -119,6 +122,13 @@ impl fmt::Display for DreamError {
             }
             DreamError::FeatureUnavailable { feature, reason } => {
                 write!(f, "Feature '{}' unavailable: {}", feature, reason)
+            }
+            DreamError::CriticalState { context, details } => {
+                write!(
+                    f,
+                    "Critical state encountered in {}: {}. Manual intervention required.",
+                    context, details
+                )
             }
         }
     }
@@ -204,6 +214,14 @@ impl DreamError {
             reason: reason.into(),
         }
     }
+
+    /// Create a critical state error, signaling unrecoverable conditions
+    pub fn critical_state(context: impl Into<String>, details: impl Into<String>) -> Self {
+        DreamError::CriticalState {
+            context: context.into(),
+            details: details.into(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -265,5 +283,14 @@ mod tests {
     fn test_error_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<DreamError>();
+    }
+
+    #[test]
+    fn test_critical_state_display() {
+        let err = DreamError::critical_state("unit test", "fatal");
+        let msg = err.to_string();
+        assert!(msg.contains("Critical state"));
+        assert!(msg.contains("unit test"));
+        assert!(msg.contains("fatal"));
     }
 }

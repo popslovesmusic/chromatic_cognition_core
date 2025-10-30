@@ -593,9 +593,15 @@ impl SimpleDreamPool {
             .unwrap_or(0);
 
         if dim == 0 {
-            return Err(DreamError::index_corrupted(
-                "Semantic embedding dimension resolved to zero during HNSW rebuild",
-            ));
+            let err = DreamError::critical_state(
+                "semantic index rebuild",
+                "resolved embedding dimension of zero",
+            );
+            tracing::error!(
+                "Failed to rebuild semantic index; pool is in a critical state: {}",
+                err
+            );
+            return Err(err);
         }
 
         let capacity = self.entries.len();
@@ -669,11 +675,19 @@ impl SimpleDreamPool {
                 });
 
                 if candidate.len() != query_embedding.len() {
-                    return Err(DreamError::dimension_mismatch(
-                        query_embedding.len(),
-                        candidate.len(),
+                    let err = DreamError::critical_state(
                         "linear semantic search",
-                    ));
+                        format!(
+                            "entry embedding dimension {} does not match query {}",
+                            candidate.len(),
+                            query_embedding.len()
+                        ),
+                    );
+                    tracing::error!(
+                        "Linear semantic search encountered critical state while scoring entry {entry_id:?}: {}",
+                        err
+                    );
+                    return Err(err);
                 }
 
                 let score = Self::cosine_similarity_dense(query_embedding, &candidate);
@@ -2007,5 +2021,95 @@ mod tests {
         assert_eq!(restored.entry_ids.len(), pool.entry_ids.len());
         assert_eq!(restored.id_to_entry.len(), pool.id_to_entry.len());
         assert!(restored.soft_index.is_some());
+    }
+
+    #[test]
+    fn test_retrieve_semantic_logs_hnsw_fallback() {
+        use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
+        use serde_json::json;
+
+        let mut config = PoolConfig::default();
+        config.use_hnsw = true;
+        config.retrieval_limit = 1;
+
+        let mut pool = SimpleDreamPool::new(config);
+
+        let tensor = ChromaticTensor::from_seed(123, 8, 8, 2);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.95,
+            violation: 0.01,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+
+        pool.add(tensor.clone(), result.clone());
+
+        pool.hnsw_index = Some(crate::dream::hnsw_index::HnswIndex::new(8, 1));
+
+        let _ = tracing::take_logs();
+        let ids = pool.retrieve_semantic(&tensor).unwrap();
+        assert_eq!(ids.len(), 1);
+
+        let logs = tracing::take_logs();
+        assert!(logs.iter().any(|entry| {
+            entry.level == "warn"
+                && entry
+                    .message
+                    .contains("HNSW semantic search failed; falling back to linear search")
+        }));
+    }
+
+    #[test]
+    fn test_retrieve_semantic_reports_critical_state_on_corruption() {
+        use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
+        use serde_json::json;
+
+        let mut config = PoolConfig::default();
+        config.use_hnsw = false;
+        config.retrieval_limit = 1;
+
+        let mut pool = SimpleDreamPool::new(config);
+
+        let tensor = ChromaticTensor::from_seed(42, 8, 8, 2);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.05,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+
+        pool.add(tensor.clone(), result);
+
+        if let Some(entry) = pool.entries.front_mut() {
+            entry.embed = Some(vec![0.0; 32]);
+        }
+
+        if let Some(entry_id) = pool.entry_ids.front().copied() {
+            if let Some(entry) = pool.id_to_entry.get_mut(&entry_id) {
+                entry.embed = Some(vec![0.0; 32]);
+            }
+        }
+
+        let _ = tracing::take_logs();
+        let err = pool.retrieve_semantic(&tensor).unwrap_err();
+
+        match err {
+            DreamError::CriticalState { context, details } => {
+                assert!(context.contains("linear semantic search"));
+                assert!(details.contains("does not match"));
+            }
+            other => panic!("expected critical state error, got {other:?}"),
+        }
+
+        let logs = tracing::take_logs();
+        assert!(logs
+            .iter()
+            .any(|entry| { entry.level == "error" && entry.message.contains("critical state") }));
     }
 }

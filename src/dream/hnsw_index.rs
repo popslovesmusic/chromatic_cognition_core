@@ -341,9 +341,12 @@ impl<'a> HnswIndex<'a> {
     ///
     pub fn build(&mut self, mode: Similarity) -> DreamResult<()> {
         if self.id_slots.len() != self.embeddings.len() {
-            return Err(DreamError::index_corrupted(
-                "HNSW build: id_map and pending embeddings length mismatch",
-            ));
+            let err = DreamError::critical_state(
+                "HNSW build",
+                "id_map and pending embeddings length mismatch",
+            );
+            tracing::error!("HNSW build failed due to structural corruption: {}", err);
+            return Err(err);
         }
 
         let num_entries = self.embeddings.len();
@@ -467,9 +470,15 @@ impl<'a> HnswIndex<'a> {
             let distance = neighbor.distance;
 
             if !distance.is_finite() {
-                return Err(DreamError::index_corrupted(
-                    "HNSW search: non-finite distance returned",
-                ));
+                let err = DreamError::critical_state(
+                    "HNSW search",
+                    "non-finite distance returned from ANN graph",
+                );
+                tracing::error!(
+                    "HNSW query returned invalid distance for node {internal_id}: {}",
+                    err
+                );
+                return Err(err);
             }
 
             if let Some(flags) = self.ghost_metrics.get(&internal_id) {
@@ -839,7 +848,13 @@ mod tests {
         index.id_slots.push(Some(EntryId::new_v4()));
         let result = index.build(Similarity::Cosine);
 
-        assert!(result.is_err());
+        match result {
+            Err(DreamError::CriticalState { context, details }) => {
+                assert!(context.contains("HNSW build"));
+                assert!(details.contains("id_map"));
+            }
+            other => panic!("expected critical state error, got {other:?}"),
+        }
     }
 
     #[test]
