@@ -35,6 +35,7 @@ pub mod bridge;
 pub mod checkpoint;
 pub mod config;
 pub mod data;
+pub mod diagnostics;
 pub mod dream;
 pub mod learner;
 pub mod logging;
@@ -52,6 +53,7 @@ pub use checkpoint::{CheckpointError, Checkpointable};
 pub use config::{
     BridgeConfig, EngineConfig, Phase5AConfig, Phase5BConfig, Phase5CConfig, Phase6BConfig,
 };
+pub use diagnostics::{ChromaticSpiralPipeline, ChromaticSpiralUniform};
 pub use dream::{BiasProfile, ChromaBias, ClassBias, SimpleDreamPool, SpectralBias};
 pub use learner::feedback::{ClassUtilityStats, FeedbackRecord, UtilityAggregator};
 pub use learner::training::{train_baseline, train_with_dreams, TrainingConfig, TrainingResult};

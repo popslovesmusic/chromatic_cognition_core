@@ -75,6 +75,13 @@ pub struct DreamEntry {
     pub hue_category: usize,
 }
 
+fn assert_send_sync<T: Send + Sync>() {}
+
+const _: fn() = assert_send_sync::<DreamEntry>;
+const _: fn() = assert_send_sync::<ChromaticTensor>;
+const _: fn() = assert_send_sync::<SolverResult>;
+const _: fn() = assert_send_sync::<SpectralFeatures>;
+
 #[derive(Serialize, Deserialize)]
 struct ChromaticTensorCheckpoint {
     colors: Vec<f32>,

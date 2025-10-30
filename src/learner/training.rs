@@ -178,10 +178,21 @@ pub fn train_with_dreams<S: Solver>(
             // Store augmented tensors in pool if using solver evaluation
             if config.use_dream_pool {
                 if let (Some(pool), Some(solver)) = (pool.as_mut(), solver.as_mut()) {
-                    for tensor in batch_tensors {
-                        if let Ok(result) = solver.evaluate(&tensor, false) {
-                            pool.add_if_coherent(tensor, result);
-                        }
+                    let ingestion_data: Vec<_> = {
+                        let solver = solver;
+                        batch_tensors
+                            .into_iter()
+                            .filter_map(|tensor| {
+                                solver
+                                    .evaluate(&tensor, false)
+                                    .ok()
+                                    .map(|result| (tensor, result))
+                            })
+                            .collect()
+                    };
+
+                    if !ingestion_data.is_empty() {
+                        pool.add_batch_if_coherent(ingestion_data);
                     }
                 }
             }

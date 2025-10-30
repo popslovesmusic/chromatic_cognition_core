@@ -68,6 +68,12 @@ pub struct UnifiedModalityVector {
     channels: Vec<f32>,
 }
 
+fn assert_send_sync<T: Send + Sync>() {}
+
+const _: fn() = assert_send_sync::<UnifiedModalityVector>;
+const _: fn() = assert_send_sync::<ModalityMapper>;
+const _: fn() = assert_send_sync::<ChromaticTensor>;
+
 impl UnifiedModalityVector {
     pub fn components(&self) -> &[f32] {
         &self.channels
