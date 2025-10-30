@@ -118,7 +118,8 @@ pub struct PoolConfig {
     pub retrieval_limit: usize,
     /// Use HNSW index for scalable retrieval (Phase 4 optimization)
     /// When false, uses linear SoftIndex (simpler but O(n) search)
-    /// When true, uses HNSW graph (O(log n) search, 100× faster at 10K+ entries)
+    /// Enable this when the pool regularly exceeds ~5,000 entries or when
+    /// retrieval latency must remain under 100 ms.
     pub use_hnsw: bool,
     /// Memory budget in megabytes (Phase 4 optimization)
     /// When None, no memory limit is enforced (legacy behavior)
@@ -132,8 +133,8 @@ impl Default for PoolConfig {
             max_size: 1000,
             coherence_threshold: 0.75,
             retrieval_limit: 3,
-            use_hnsw: true,              // Default to HNSW for better scalability
-            memory_budget_mb: Some(500), // Default 500 MB limit
+            use_hnsw: false,        // Default to linear index; HNSW is opt-in
+            memory_budget_mb: None, // Unlimited unless specified
         }
     }
 }
@@ -249,7 +250,9 @@ impl SimpleDreamPool {
 
     fn rebuild_semantic_index_internal(&mut self) -> DreamResult<()> {
         if self.entries.is_empty() {
-            self.hnsw_index = None;
+            if let Some(index) = self.hnsw_index.as_mut() {
+                index.clear();
+            }
             return Ok(());
         }
 
@@ -272,7 +275,22 @@ impl SimpleDreamPool {
             ));
         }
 
-        let mut hnsw = HnswIndex::new(dim, self.entries.len());
+        let capacity = self.entries.len();
+        let needs_new = self
+            .hnsw_index
+            .as_ref()
+            .map_or(true, |index| index.dim() != dim);
+
+        if needs_new {
+            self.hnsw_index = Some(HnswIndex::new(dim, capacity));
+        }
+
+        let hnsw = self
+            .hnsw_index
+            .as_mut()
+            .expect("HNSW index must exist after initialization");
+
+        hnsw.clear();
 
         for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter()) {
             let vector = entry.embed.as_ref().cloned().unwrap_or_else(|| {
@@ -284,7 +302,6 @@ impl SimpleDreamPool {
         }
 
         hnsw.build(Similarity::Cosine)?;
-        self.hnsw_index = Some(hnsw);
         self.evictions_since_rebuild = 0;
 
         Ok(())
@@ -371,13 +388,8 @@ impl SimpleDreamPool {
                 self.id_to_entry.remove(&old_id);
 
                 if let Some(hnsw) = self.hnsw_index.as_mut() {
-                    let removed_internal = {
-                        let map = hnsw.get_mut_id_map();
-                        map.remove(&old_id)
-                    };
-
-                    if let Some(internal) = removed_internal {
-                        hnsw.clear_internal_slot(internal);
+                    if !hnsw.remove(&old_id) {
+                        tracing::warn!("Evicted entry {old_id:?} was missing from HNSW id map");
                     }
                 }
             }

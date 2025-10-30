@@ -4,6 +4,17 @@
 //! that replaces the O(n) linear scan with O(log n) HNSW search.
 //!
 //! **Performance:** 100× speedup at 10K entries with 95-99% recall
+//!
+//! # When to enable HNSW
+//!
+//! The approximate index is most effective when either of the following is
+//! true:
+//!
+//! - The pool holds more than 5,000 entries.
+//! - Semantic queries must complete in under 100 milliseconds.
+//!
+//! Outside of those regimes the linear scan provides simpler, deterministic
+//! behaviour with lower memory overhead.
 
 use crate::dream::error::{DreamError, DreamResult};
 use crate::dream::soft_index::{EntryId, Similarity};
@@ -215,6 +226,18 @@ impl<'a> HnswIndex<'a> {
         }
 
         Ok(())
+    }
+
+    /// Remove an entry from the index. The underlying HNSW graph does not
+    /// support hard deletion, so the embedding is marked as a "ghost" node and
+    /// ignored during future searches.
+    pub fn remove(&mut self, id: &EntryId) -> bool {
+        if let Some(internal_id) = self.id_map.remove(id) {
+            self.clear_internal_slot(internal_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Build or rebuild the HNSW index for a specific similarity mode.
@@ -440,15 +463,9 @@ impl<'a> HnswIndex<'a> {
         }
     }
 
-    /// Get mutable access to the EntryId → internal ID map. Intended for
-    /// controlled lifecycle management via higher-level protocols.
-    pub fn get_mut_id_map(&mut self) -> &mut HashMap<Uuid, u32> {
-        &mut self.id_map
-    }
-
     /// Clear a slot in the internal identifier table. This marks the
     /// corresponding internal node as logically removed.
-    pub fn clear_internal_slot(&mut self, internal_id: u32) {
+    fn clear_internal_slot(&mut self, internal_id: u32) {
         let idx = internal_id as usize;
         if let Some(slot) = self.id_slots.get_mut(idx) {
             *slot = None;
@@ -702,11 +719,7 @@ mod tests {
 
         // Remove the second entry
         let removed_id = embeddings[1].0;
-        let internal = {
-            let map = index.get_mut_id_map();
-            map.remove(&removed_id).unwrap()
-        };
-        index.clear_internal_slot(internal);
+        assert!(index.remove(&removed_id));
 
         // Search should skip the removed entry and report one ghost for cosine
         let results = index
