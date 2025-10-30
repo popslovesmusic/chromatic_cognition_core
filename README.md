@@ -50,6 +50,18 @@ cargo test
 
 See [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) for the latest recorded results, environment details, and reproduction steps.
 
+### Release Packaging
+
+To build a distributable archive with the statically linked binary, finalized configuration
+files, and the `FINAL_BASELINE` performance report, run:
+
+```bash
+./scripts/build_release.sh
+```
+
+The script creates `release/chromatic_cognition_core-<version>.tar.gz`, which can be
+shared directly with end users.
+
 ### Hybrid Semantic Retrieval
 
 The Chromatic Semantic Archive exposes low-latency retrieval via `SimpleDreamPool::retrieve_hybrid`. This API combines the hue

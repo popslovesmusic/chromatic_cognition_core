@@ -2,6 +2,7 @@
 /target/
 /out/
 /logs/
+/release/
 
 # Backup files
 **/*.rs.bk
