@@ -27,6 +27,7 @@ use std::time::SystemTime;
 ///
 /// Enhanced for Phase 3B with class awareness, utility tracking, and timestamps
 /// Enhanced for Phase 4 with spectral features and embeddings
+/// Enhanced for Phase 7 (Phase 2 Cognitive Integration) with UMS vector
 #[derive(Clone)]
 pub struct DreamEntry {
     pub tensor: ChromaticTensor,
@@ -46,6 +47,11 @@ pub struct DreamEntry {
     pub embed: Option<Vec<f32>>,
     /// Aggregated mean utility (Phase 4)
     pub util_mean: f32,
+    /// Unified Modality Space vector (Phase 7 / Phase 2 Cognitive Integration)
+    /// 512D deterministic encoding for Chromatic Semantic Archive (CSA)
+    pub ums_vector: Vec<f32>,
+    /// Hue category index [0-11] for CSA partitioning (Phase 7)
+    pub hue_category: usize,
 }
 
 impl DreamEntry {
@@ -53,9 +59,21 @@ impl DreamEntry {
     ///
     /// Spectral features are computed immediately using Hann windowing.
     /// This one-time computation enables faster embedding generation later.
+    ///
+    /// Phase 7: UMS vector is computed immediately for Chromatic Semantic Archive.
     pub fn new(tensor: ChromaticTensor, result: SolverResult) -> Self {
         let chroma_signature = tensor.mean_rgb();
         let spectral_features = extract_spectral_features(&tensor, WindowFunction::Hann);
+
+        // Phase 7: Compute UMS vector and hue category for CSA
+        let mapper = Self::default_modality_mapper();
+        let ums = encode_to_ums(&mapper, &tensor);
+        let ums_vector = ums.components().to_vec();
+
+        // Extract hue from chroma signature and map to category
+        let rgb = chroma_signature;
+        let hue_radians = Self::rgb_to_hue(rgb);
+        let hue_category = mapper.map_hue_to_category(hue_radians);
 
         Self {
             tensor,
@@ -68,12 +86,16 @@ impl DreamEntry {
             spectral_features,
             embed: None,
             util_mean: 0.0,
+            ums_vector,
+            hue_category,
         }
     }
 
     /// Create a new dream entry with class label (Phase 3B)
     ///
     /// Spectral features are computed immediately using Hann windowing.
+    ///
+    /// Phase 7: UMS vector is computed immediately for Chromatic Semantic Archive.
     pub fn with_class(
         tensor: ChromaticTensor,
         result: SolverResult,
@@ -81,6 +103,16 @@ impl DreamEntry {
     ) -> Self {
         let chroma_signature = tensor.mean_rgb();
         let spectral_features = extract_spectral_features(&tensor, WindowFunction::Hann);
+
+        // Phase 7: Compute UMS vector and hue category for CSA
+        let mapper = Self::default_modality_mapper();
+        let ums = encode_to_ums(&mapper, &tensor);
+        let ums_vector = ums.components().to_vec();
+
+        // Extract hue from chroma signature and map to category
+        let rgb = chroma_signature;
+        let hue_radians = Self::rgb_to_hue(rgb);
+        let hue_category = mapper.map_hue_to_category(hue_radians);
 
         Self {
             tensor,
@@ -93,6 +125,8 @@ impl DreamEntry {
             spectral_features,
             embed: None,
             util_mean: 0.0,
+            ums_vector,
+            hue_category,
         }
     }
 
@@ -104,6 +138,72 @@ impl DreamEntry {
     /// Increment usage count when retrieved (Phase 3B)
     pub fn increment_usage(&mut self) {
         self.usage_count += 1;
+    }
+
+    /// Create default modality mapper for UMS encoding (Phase 7)
+    fn default_modality_mapper() -> ModalityMapper {
+        let bridge_config = BridgeConfig::from_str(include_str!("../../config/bridge.toml"))
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    "Failed to load bridge configuration for UMS encoding; falling back to defaults: {}",
+                    err
+                );
+                BridgeConfig {
+                    base: BridgeBaseConfig {
+                        f_min: 110.0,
+                        octaves: 7.0,
+                        gamma: 1.0,
+                        sample_rate: 44_100,
+                    },
+                    spectral: BridgeSpectralConfig {
+                        fft_size: 4096,
+                        accum_format: "Q16.48".to_string(),
+                        reduction_mode: "pairwise_neumaier".to_string(),
+                        categorical_count: 12,
+                    },
+                    reversibility: BridgeReversibilityConfig {
+                        delta_e_tolerance: 0.001,
+                    },
+                }
+            });
+
+        ModalityMapper::new(bridge_config)
+    }
+
+    /// Convert RGB to hue in radians (Phase 7)
+    ///
+    /// Uses HSV color space conversion to extract hue angle.
+    fn rgb_to_hue(rgb: [f32; 3]) -> f32 {
+        let r = rgb[0];
+        let g = rgb[1];
+        let b = rgb[2];
+
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+
+        if delta < f32::EPSILON {
+            return 0.0; // Achromatic (gray)
+        }
+
+        let hue_deg = if (max - r).abs() < f32::EPSILON {
+            // Red is max
+            60.0 * (((g - b) / delta) % 6.0)
+        } else if (max - g).abs() < f32::EPSILON {
+            // Green is max
+            60.0 * (((b - r) / delta) + 2.0)
+        } else {
+            // Blue is max
+            60.0 * (((r - g) / delta) + 4.0)
+        };
+
+        // Convert to radians and ensure positive
+        let hue_rad = hue_deg.to_radians();
+        if hue_rad < 0.0 {
+            hue_rad + std::f32::consts::TAU
+        } else {
+            hue_rad
+        }
     }
 }
 

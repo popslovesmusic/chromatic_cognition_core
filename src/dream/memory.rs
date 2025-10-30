@@ -304,6 +304,13 @@ pub fn estimate_entry_size(entry: &DreamEntry) -> usize {
     // Util mean: f32
     size += mem::size_of::<f32>();
 
+    // UMS vector: Vec<f32> with 512 elements (Phase 7)
+    size += entry.ums_vector.len() * mem::size_of::<f32>();
+    size += mem::size_of::<Vec<f32>>(); // Vec overhead
+
+    // Hue category: usize (Phase 7)
+    size += mem::size_of::<usize>();
+
     size
 }
 

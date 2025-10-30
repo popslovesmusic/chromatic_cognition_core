@@ -249,6 +249,10 @@ mod tests {
             mean_psd: 1.0,
         };
 
+        // Create UMS vector for testing (Phase 7)
+        let ums_vector = vec![0.0f32; 512];
+        let hue_category = 0usize;
+
         (id, DreamEntry {
             tensor,
             result,
@@ -260,6 +264,8 @@ mod tests {
             spectral_features,
             embed: None,
             util_mean: utility,
+            ums_vector,
+            hue_category,
         })
     }
 

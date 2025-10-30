@@ -357,3 +357,133 @@ fn test_hybrid_scoring_weights() {
     let results = rerank_hybrid(&hits, &equal_weights, &entries, None);
     assert_eq!(results.len(), 2);
 }
+
+/// Test UMS round-trip fidelity (Phase 7 / Phase 2 Cognitive Integration)
+///
+/// Verifies the complete data path:
+/// ChromaticTensor → UMS Encode → UMS Decode → Original Tensor Features
+///
+/// Asserts that ΔE94 distance between starting and ending color vectors is ≤ 1.0 × 10^-3
+///
+/// Note: decode_from_ums returns HSL (hue, saturation, luminance), where hue is in radians.
+/// This test validates that the round-trip encoding preserves color fidelity within the
+/// specified tolerance using perceptual color difference (ΔE94).
+#[test]
+fn test_ums_round_trip_fidelity() {
+    use crate::bridge::{encode_to_ums, decode_from_ums, ModalityMapper};
+    use crate::config::BridgeConfig;
+    use crate::spectral::color::delta_e94;
+    use crate::spectral::canonical_hue;
+
+    // Helper to convert HSL to RGB (inline version)
+    fn hsl_to_rgb(h_norm: f32, saturation: f32, luminance: f32) -> [f32; 3] {
+        let c = (1.0 - (2.0 * luminance - 1.0).abs()) * saturation;
+        let h_prime = h_norm * 6.0;
+        let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+
+        let (r1, g1, b1) = match h_prime.floor() as i32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            5 | 6 => (c, 0.0, x),
+            _ => (0.0, 0.0, 0.0),
+        };
+
+        let m = luminance - c / 2.0;
+        [(r1 + m).clamp(0.0, 1.0), (g1 + m).clamp(0.0, 1.0), (b1 + m).clamp(0.0, 1.0)]
+    }
+
+    // Load bridge configuration
+    let config = BridgeConfig::from_str(include_str!("../../../config/bridge.toml"))
+        .expect("valid bridge config");
+    let mapper = ModalityMapper::new(config.clone());
+    let tolerance = config.reversibility.delta_e_tolerance;
+
+    // Test with multiple seeds to ensure robustness
+    for seed in [42, 123, 456, 789, 1024] {
+        let tensor = ChromaticTensor::from_seed(seed, 16, 16, 4);
+        let original_rgb = tensor.mean_rgb();
+
+        // Encode to UMS
+        let ums_vector = encode_to_ums(&mapper, &tensor);
+        assert_eq!(ums_vector.components().len(), 512, "UMS vector must be 512D");
+
+        // Decode from UMS (returns HSL: [hue_radians, saturation, luminance])
+        let decoded_hsl = decode_from_ums(&ums_vector);
+
+        // Convert HSL to RGB for comparison
+        let hue_norm = canonical_hue(decoded_hsl[0]) / std::f32::consts::TAU;
+        let decoded_rgb = hsl_to_rgb(hue_norm, decoded_hsl[1], decoded_hsl[2]);
+
+        // Compute ΔE94 perceptual color difference
+        let delta_e = delta_e94(original_rgb, decoded_rgb);
+
+        // Assert fidelity requirement: ΔE94 ≤ tolerance (1.0 × 10^-3 from config)
+        assert!(
+            delta_e <= tolerance,
+            "UMS round-trip fidelity requirement violated: ΔE94 = {} > {} (seed={}, original={:?}, decoded_rgb={:?}, decoded_hsl={:?})",
+            delta_e,
+            tolerance,
+            seed,
+            original_rgb,
+            decoded_rgb,
+            decoded_hsl
+        );
+
+        // Additional sanity checks
+        for channel in 0..3 {
+            assert!(
+                original_rgb[channel] >= 0.0 && original_rgb[channel] <= 1.0,
+                "Original RGB must be in [0, 1]"
+            );
+            assert!(
+                decoded_rgb[channel] >= 0.0 && decoded_rgb[channel] <= 1.0,
+                "Decoded RGB must be in [0, 1]: {:?}",
+                decoded_rgb
+            );
+        }
+    }
+}
+
+/// Test that DreamEntry automatically computes UMS vector and hue category (Phase 7)
+#[test]
+fn test_dream_entry_ums_integration() {
+    let tensor = ChromaticTensor::from_seed(42, 16, 16, 4);
+    let result = SolverResult {
+        energy: 0.1,
+        coherence: 0.9,
+        violation: 0.0,
+        grad: None,
+        mask: None,
+        meta: json!({}),
+    };
+
+    let entry = DreamEntry::new(tensor.clone(), result);
+
+    // Verify UMS vector is computed
+    assert_eq!(entry.ums_vector.len(), 512, "UMS vector must be 512D");
+
+    // Verify hue category is in valid range [0-11]
+    assert!(
+        entry.hue_category < 12,
+        "Hue category must be in [0, 11], got {}",
+        entry.hue_category
+    );
+
+    // Verify UMS encoding is deterministic
+    let result2 = SolverResult {
+        energy: 0.2,
+        coherence: 0.8,
+        violation: 0.0,
+        grad: None,
+        mask: None,
+        meta: json!({}),
+    };
+    let entry2 = DreamEntry::new(tensor.clone(), result2);
+
+    // Same tensor should produce same UMS vector and hue category
+    assert_eq!(entry.ums_vector, entry2.ums_vector, "UMS encoding must be deterministic");
+    assert_eq!(entry.hue_category, entry2.hue_category, "Hue category must be deterministic");
+}
