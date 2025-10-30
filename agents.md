@@ -1,36 +1,35 @@
-# Agents Guide — Chromatic Cognition / Tiny Trainer
+# Phase 3: Archive Finalization (Retrieval)
 
-## Mission
-Act as a co-developer focused on correctness, transparency, and modular growth.
-Your task is to convert design intent into clean, verifiable Rust code without adding complexity.
-Favor explicitness, determinism, and comments that explain reasoning.
+## 🎯 Goal
+Implement the core mission of the Chromatic Semantic Archive (CSA): provide reliable, low-latency Semantic Retrieval by stabilizing the HNSW index and integrating the search function.
 
-## Boundaries
-- Do **not** introduce frameworks larger than: `ndarray`, `rayon`, `serde`, `plotters`, or `candle`.
-- Remain **CPU-only** until `GPU_ENABLED=true` appears in config.
-- All code must compile with `cargo build --release` on Linux or Windows without external toolchains.
-- Any stochastic or parallel behavior must log its seed and thread count.
+---
 
-## Conventions
-- Follow `snake_case` for functions, `PascalCase` for structs/enums.
-- Each public struct implements `Debug`, `Clone`, and `Serialize`.
-- All functions that change tensors emit a log entry via `tracing` or plain JSON to `logs/`.
+### Subphase 3.A: HNSW Index Stabilization
 
-## Workflow
-1. Read `spec.md` for current feature list.
-2. Propose file diffs before major refactors.
-3. After implementing, auto-generate:
-   - a short `CHANGELOG` entry,
-   - a single-page `report.md` summarizing new behavior and metrics.
+**Focus:** Modifying the HNSW index to support efficient incremental updates, avoiding unnecessary full rebuilds.
 
-## Key Roles
-| Agent | Responsibility |
-|--------|----------------|
-| **Architect** | Maintain structure and dependencies. |
-| **Coder** | Implement logic per spec. |
-| **Tester** | Write minimal unit tests for every new function. |
-| **DocBot** | Keep `README` and `api.md` synchronized. |
+1.  **Implement HNSW Incremental Add:** Modify the `HnswIndex::add()` function (or an equivalent entry point) to support **true incremental insertion**. The HNSW library should be used to add the new embedding directly to the existing graph structure without forcing the complete destruction and rebuild of the index. This is a fundamental change from the design flaw identified earlier.
+2.  **Fix HNSW Ghost Nodes:** Review the logic within `evict_n_entries` or an associated HNSW handler to ensure that when an entry is evicted, its corresponding node is correctly **removed or marked as deleted** within the HNSW graph structure itself (if the library supports it, otherwise, ensure the index is aware of the deletion).
 
-## Communication
-When uncertain, prefer to ask “Is this in or out of scope for current spec?”  
-Never assume hidden requirements.
+---
+
+### Subphase 3.B: Semantic Retrieval Implementation
+
+**Focus:** Implementing the primary function for low-latency similarity search.
+
+1.  **Implement Retrieval Function:** Create the primary retrieval function, e.g., `fn retrieve_semantic(&self, query_tensor: &ChromaticTensor) -> DreamResult<Vec<EntryId>>` within the `SimpleDreamPool` or a new `CSA` façade.
+2.  **Query Path:** This function must deterministically route the query:
+    * **Tensor $\rightarrow$ UMS:** Convert the input `query_tensor` into a normalized **UMS Vector**.
+    * **UMS $\rightarrow$ HNSW Search:** Use the UMS vector to query the HNSW index for the **top-K** most similar archived entries.
+    * **Fallback:** Implement a deterministic fallback to the linear index if the HNSW index is unavailable or fails, logging the failure as a **DreamError**.
+3.  **Result Filtering:** Ensure the returned results (which are `EntryId`s) are filtered against the pool's internal `id_to_entry` map to prevent returning **"ghost nodes"** or entries that were recently evicted.
+
+---
+
+### Subphase 3.C: Final Audit and Project Alignment
+
+**Focus:** Finalizing documentation and ensuring the system is configured for the mission.
+
+1.  **Documentation Update:** Update the internal documentation (e.g., in `PoolConfig`) to reflect the **Hybrid Approach (Option C)**: the default setting should be `use_hnsw: false` (Linear Index), making the optimization **opt-in**.
+2.  **Project Alignment:** Add documentation to the relevant module (e.g., `HnswIndex`) outlining **"When to use HNSW"**: specifically, when the pool size is $\mathbf{>5000}$ entries or when query latency must be $\mathbf{<100}$ milliseconds.
