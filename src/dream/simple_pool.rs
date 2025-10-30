@@ -1083,6 +1083,21 @@ impl SimpleDreamPool {
             .collect()
     }
 
+    /// Retrieve dreams using semantic UMS search (Phase 7 / Phase 3)
+    ///
+    /// Primary low-latency semantic search utilizing HNSW index for speed.
+    ///
+    /// # Arguments
+    /// * `query_tensor` - ChromaticTensor to search for
+    ///
+    /// # Returns
+    /// Vec<EntryId> of top-K most similar entries (K from config.retrieval_limit)
+    ///
+    /// # Implementation
+    /// 1. Converts query_tensor to UMS vector (512D)
+    /// 2. Uses HNSW index for O(log n) search if available
+    /// 3. Falls back to linear search if HNSW unavailable or fails
+    /// 4. Filters results to active entries (prevents ghost nodes)
     pub fn retrieve_semantic(&self, query_tensor: &ChromaticTensor) -> DreamResult<Vec<EntryId>> {
         if self.entries.is_empty() {
             return Ok(Vec::new());
@@ -1126,6 +1141,118 @@ impl SimpleDreamPool {
         }
 
         self.linear_semantic_search(query_embedding, k)
+    }
+
+    /// Retrieve dreams by category with UMS ranking (Phase 7 / Phase 3 Hybrid Retrieval)
+    ///
+    /// High-fidelity retrieval combining discrete hue category partitioning
+    /// with continuous UMS vector similarity ranking.
+    ///
+    /// # Arguments
+    /// * `query_tensor` - ChromaticTensor to search for
+    /// * `k` - Number of results to return
+    ///
+    /// # Returns
+    /// Vec<DreamEntry> of top-K most similar entries within the same hue category
+    ///
+    /// # Implementation
+    /// 1. Converts query_tensor to UMS vector and extracts hue category
+    /// 2. Filters pool to entries matching query's hue category [0-11]
+    /// 3. Ranks filtered entries by cosine similarity in UMS space
+    /// 4. Returns top-K entries sorted by similarity (descending)
+    ///
+    /// # Performance
+    /// - Category filtering: O(n) where n = total entries
+    /// - UMS ranking: O(m log m) where m = entries in category (~n/12)
+    /// - More efficient than full pool search when categories are balanced
+    pub fn retrieve_hybrid(
+        &self,
+        query_tensor: &ChromaticTensor,
+        k: usize,
+    ) -> Vec<DreamEntry> {
+        if self.entries.is_empty() || k == 0 {
+            return Vec::new();
+        }
+
+        // Convert query to UMS and extract hue category
+        let ums = encode_to_ums(&self.modality_mapper, query_tensor);
+        let query_ums = ums.components();
+        let query_rgb = query_tensor.mean_rgb();
+        let query_hue = DreamEntry::rgb_to_hue(query_rgb);
+        let query_category = self.modality_mapper.map_hue_to_category(query_hue);
+
+        // Filter by category and rank by UMS similarity
+        let mut scored: Vec<(f32, &DreamEntry)> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.hue_category == query_category)
+            .map(|entry| {
+                let similarity = Self::cosine_similarity_dense(query_ums, &entry.ums_vector);
+                (similarity, entry)
+            })
+            .collect();
+
+        // Sort by similarity descending
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+
+        // Return top-K entries
+        scored
+            .into_iter()
+            .take(k)
+            .map(|(_, entry)| entry.clone())
+            .collect()
+    }
+
+    /// Retrieve dreams by specific category with UMS ranking (Phase 7 / Phase 3)
+    ///
+    /// Allows explicit category selection for fine-grained control.
+    ///
+    /// # Arguments
+    /// * `target_category` - Hue category index [0-11] to search within
+    /// * `query_ums` - UMS vector to rank against
+    /// * `k` - Number of results to return
+    ///
+    /// # Returns
+    /// Vec<DreamEntry> of top-K most similar entries within the specified category
+    pub fn retrieve_by_category(
+        &self,
+        target_category: usize,
+        query_ums: &[f32],
+        k: usize,
+    ) -> Vec<DreamEntry> {
+        if self.entries.is_empty() || k == 0 {
+            return Vec::new();
+        }
+
+        // Validate category
+        if target_category >= 12 {
+            tracing::warn!(
+                "Invalid category {} (must be 0-11); returning empty results",
+                target_category
+            );
+            return Vec::new();
+        }
+
+        // Filter by category and rank by UMS similarity
+        let mut scored: Vec<(f32, &DreamEntry)> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.hue_category == target_category)
+            .map(|entry| {
+                let similarity = Self::cosine_similarity_dense(query_ums, &entry.ums_vector);
+                (similarity, entry)
+            })
+            .collect();
+
+        // Sort by similarity descending
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+
+        // Return top-K entries
+        scored
+            .into_iter()
+            .take(k)
+            .map(|(_, entry)| entry.clone())
+            .collect()
     }
 
     /// Check if any index is built (Phase 4)

@@ -487,3 +487,112 @@ fn test_dream_entry_ums_integration() {
     assert_eq!(entry.ums_vector, entry2.ums_vector, "UMS encoding must be deterministic");
     assert_eq!(entry.hue_category, entry2.hue_category, "Hue category must be deterministic");
 }
+
+/// Test category-based hybrid retrieval (Phase 3)
+#[test]
+fn test_retrieve_hybrid_category_filtering() {
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add entries with different hue categories
+    // Create tensors with distinct RGB values to ensure different categories
+    for i in 0..30 {
+        let mut tensor = ChromaticTensor::new(8, 8, 2);
+        // Create distinct hues by varying the dominant color channel
+        let hue_offset = (i as f32) / 30.0;
+        for row in 0..8 {
+            for col in 0..8 {
+                for layer in 0..2 {
+                    tensor.colors[[row, col, layer, 0]] = (hue_offset + 0.1_f32).clamp(0.0, 1.0);
+                    tensor.colors[[row, col, layer, 1]] = 0.5_f32.clamp(0.0, 1.0);
+                    tensor.colors[[row, col, layer, 2]] = (1.0_f32 - hue_offset).clamp(0.0, 1.0);
+                }
+            }
+        }
+
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({"index": i}),
+        };
+
+        pool.add_if_coherent(tensor, result);
+    }
+
+    assert!(pool.len() > 0, "Pool should have entries");
+
+    // Test retrieve_hybrid: should filter by query's category and rank by UMS
+    let query_tensor = ChromaticTensor::from_seed(42, 8, 8, 2);
+    let results = pool.retrieve_hybrid(&query_tensor, 5);
+
+    // Verify results
+    assert!(results.len() <= 5, "Should return at most 5 results");
+
+    // All results should be from the same category as the query
+    if !results.is_empty() {
+        let query_entry = DreamEntry::new(query_tensor.clone(), SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        });
+        let query_category = query_entry.hue_category;
+
+        for result in &results {
+            assert_eq!(
+                result.hue_category, query_category,
+                "All results should be from query's category"
+            );
+        }
+    }
+}
+
+/// Test retrieve_by_category (Phase 3)
+#[test]
+fn test_retrieve_by_category() {
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    // Add entries across different categories
+    for i in 0..24 {
+        let tensor = ChromaticTensor::from_seed(i, 8, 8, 2);
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({"index": i}),
+        };
+
+        pool.add_if_coherent(tensor, result);
+    }
+
+    // Create a query UMS vector (use an actual entry's UMS for testing)
+    let query_tensor = ChromaticTensor::from_seed(42, 8, 8, 2);
+    let query_entry = DreamEntry::new(query_tensor, SolverResult {
+        energy: 0.1,
+        coherence: 0.9,
+        violation: 0.0,
+        grad: None,
+        mask: None,
+        meta: json!({}),
+    });
+
+    // Test retrieve_by_category for category 0
+    let results = pool.retrieve_by_category(0, &query_entry.ums_vector, 3);
+
+    // Verify all results are from category 0
+    for result in &results {
+        assert_eq!(result.hue_category, 0, "All results should be from category 0");
+    }
+
+    // Test invalid category (should return empty with warning)
+    let results = pool.retrieve_by_category(12, &query_entry.ums_vector, 3);
+    assert_eq!(results.len(), 0, "Invalid category should return empty results");
+}
