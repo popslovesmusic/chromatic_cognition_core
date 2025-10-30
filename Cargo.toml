@@ -33,3 +33,7 @@ tracing = { path = "vendor/tracing_stub" }
 [[bench]]
 name = "dream_benchmarks"
 harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1

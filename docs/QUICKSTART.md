@@ -6,8 +6,12 @@ Get up and running with Chromatic Cognition Core in 5 minutes.
 
 ### Prerequisites
 
-- Rust 1.70 or later
-- Cargo (comes with Rust)
+- Rust 1.70 or later with Cargo (bundled with Rustup)
+- MUSL target support for Rust:
+  ```bash
+  rustup target add x86_64-unknown-linux-musl
+  ```
+- MUSL tooling installed on the host (e.g., `musl-tools` or `musl-gcc`) to enable static linking
 
 ### Clone and Build
 
