@@ -5,6 +5,46 @@ layers = 8
 seed = 42
 device = "cpu"
 
+[environment]
+default = "production"
+available = ["production", "staging", "development"]
+
+[environment.production]
+debug = false
+log_level = "info"
+metrics_enabled = true
+persist_state = true
+telemetry_endpoint = "https://telemetry.chromatic.example/prod"
+
+[environment.production.logging]
+format = "json"
+rotation = "daily"
+max_files = 14
+
+[environment.staging]
+debug = true
+log_level = "debug"
+metrics_enabled = true
+persist_state = false
+telemetry_endpoint = "https://telemetry.chromatic.example/stage"
+
+[environment.staging.logging]
+format = "json"
+rotation = "daily"
+max_files = 7
+
+[environment.development]
+debug = true
+log_level = "debug"
+metrics_enabled = false
+persist_state = false
+telemetry_endpoint = "http://localhost:4317"
+
+[environment.development.logging]
+format = "pretty"
+rotation = "never"
+max_files = 0
+
 [phase4]
 embed_dim = 64
 similarity = "cosine"
