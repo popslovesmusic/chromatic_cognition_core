@@ -334,6 +334,16 @@ EngineConfig {
 - **toml** (0.8): Configuration file format
 - **plotters** (0.3): Plotting and image export
 
+## Checkpoint Serialization
+
+### Chromatic Network State
+
+| Component | Data Serialized | Rationale |
+| --- | --- | --- |
+| Network Weights | All `ChromaticLayer` weights and biases | Captures the learned classification parameters with full deterministic fidelity |
+| Optimizer State | Historical moments/velocities for SGD or Adam (`OptimizerStateSnapshot`) | Preserves momentum terms so training can resume without losing convergence stability |
+| Network Configuration | Layer operations, tensor shapes, and class count (`NetworkConfigSnapshot`) | Guards against loading checkpoints into incompatible architectures |
+
 ## Future Roadmap
 
 ### Phase 1: Optimization (Current)

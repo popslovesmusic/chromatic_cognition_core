@@ -3,17 +3,85 @@
 use crate::checkpoint::{CheckpointError, Checkpointable};
 use crate::neural::layer::{ChromaticLayer, ChromaticOp};
 use crate::neural::loss::{accuracy, cross_entropy_loss};
-use crate::neural::optimizer::SGDOptimizer;
+use crate::neural::optimizer::{OptimizerStateSnapshot, SGDOptimizer};
 use crate::tensor::ChromaticTensor;
 use serde::{Deserialize, Serialize};
 
-const NETWORK_CHECKPOINT_VERSION: u32 = 1;
+const NETWORK_CHECKPOINT_VERSION: u32 = 2;
+
+#[derive(Clone, Serialize, Deserialize)]
+struct LayerConfigSnapshot {
+    operation: ChromaticOp,
+    shape: (usize, usize, usize, usize),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct NetworkConfigSnapshot {
+    layer_configs: Vec<LayerConfigSnapshot>,
+    num_classes: usize,
+}
+
+impl NetworkConfigSnapshot {
+    fn from_layers(layers: &[ChromaticLayer], num_classes: usize) -> Self {
+        let layer_configs = layers
+            .iter()
+            .map(|layer| LayerConfigSnapshot {
+                operation: layer.operation,
+                shape: layer.shape(),
+            })
+            .collect();
+
+        Self {
+            layer_configs,
+            num_classes,
+        }
+    }
+
+    fn validate_layers(&self, layers: &[ChromaticLayer]) -> Result<(), CheckpointError> {
+        if self.layer_configs.len() != layers.len() {
+            return Err(CheckpointError::InvalidFormat(format!(
+                "Layer count mismatch: expected {}, found {}",
+                self.layer_configs.len(),
+                layers.len()
+            )));
+        }
+
+        for (expected, layer) in self.layer_configs.iter().zip(layers.iter()) {
+            if expected.operation != layer.operation {
+                return Err(CheckpointError::InvalidFormat(format!(
+                    "Layer operation mismatch: expected {:?}, found {:?}",
+                    expected.operation, layer.operation
+                )));
+            }
+
+            if expected.shape != layer.shape() {
+                return Err(CheckpointError::InvalidFormat(format!(
+                    "Layer shape mismatch: expected {:?}, found {:?}",
+                    expected.shape,
+                    layer.shape()
+                )));
+            }
+        }
+
+        if self.num_classes == 0 {
+            return Err(CheckpointError::InvalidFormat(
+                "Network configuration must specify at least one class".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct ChromaticNetworkCheckpoint {
     version: u32,
     layers: Vec<ChromaticLayer>,
     num_classes: usize,
+    #[serde(default)]
+    config: Option<NetworkConfigSnapshot>,
+    #[serde(default)]
+    optimizer_state: Option<OptimizerStateSnapshot>,
 }
 
 /// A chromatic neural network for classification.
@@ -23,6 +91,8 @@ struct ChromaticNetworkCheckpoint {
 pub struct ChromaticNetwork {
     layers: Vec<ChromaticLayer>,
     num_classes: usize,
+    #[serde(default)]
+    optimizer_state: Option<OptimizerStateSnapshot>,
 }
 
 impl ChromaticNetwork {
@@ -36,6 +106,7 @@ impl ChromaticNetwork {
         Self {
             layers,
             num_classes,
+            optimizer_state: None,
         }
     }
 
@@ -146,10 +217,57 @@ impl ChromaticNetwork {
             );
         }
 
+        self.capture_optimizer_state_from_sgd(optimizer);
+
         // Compute accuracy
         let acc = accuracy(&output, label, self.num_classes);
 
         (loss, acc)
+    }
+
+    /// Returns the optimizer state captured during training, if any.
+    pub fn optimizer_state(&self) -> Option<&OptimizerStateSnapshot> {
+        self.optimizer_state.as_ref()
+    }
+
+    /// Takes ownership of the stored optimizer state.
+    pub fn take_optimizer_state(&mut self) -> Option<OptimizerStateSnapshot> {
+        self.optimizer_state.take()
+    }
+
+    /// Sets the optimizer state explicitly.
+    pub fn set_optimizer_state(&mut self, state: Option<OptimizerStateSnapshot>) {
+        self.optimizer_state = state;
+    }
+
+    /// Captures the state of an SGD optimizer.
+    pub fn capture_optimizer_state_from_sgd(&mut self, optimizer: &SGDOptimizer) {
+        self.optimizer_state = Some(OptimizerStateSnapshot::Sgd(optimizer.to_state()));
+    }
+
+    /// Captures the state of an Adam optimizer.
+    pub fn capture_optimizer_state_from_adam(
+        &mut self,
+        optimizer: &crate::neural::optimizer::AdamOptimizer,
+    ) {
+        self.optimizer_state = Some(OptimizerStateSnapshot::Adam(optimizer.to_state()));
+    }
+
+    /// Applies the stored optimizer state to an SGD optimizer, if compatible.
+    pub fn apply_optimizer_state_to_sgd(&self, optimizer: &mut SGDOptimizer) {
+        if let Some(OptimizerStateSnapshot::Sgd(state)) = &self.optimizer_state {
+            optimizer.apply_state(state.clone());
+        }
+    }
+
+    /// Applies the stored optimizer state to an Adam optimizer, if compatible.
+    pub fn apply_optimizer_state_to_adam(
+        &self,
+        optimizer: &mut crate::neural::optimizer::AdamOptimizer,
+    ) {
+        if let Some(OptimizerStateSnapshot::Adam(state)) = &self.optimizer_state {
+            optimizer.apply_state(state.clone());
+        }
     }
 
     /// Evaluates the network on a batch of samples.
@@ -183,6 +301,8 @@ impl Checkpointable for ChromaticNetwork {
             version: NETWORK_CHECKPOINT_VERSION,
             layers: self.layers.clone(),
             num_classes: self.num_classes,
+            config: Some(NetworkConfigSnapshot::from_layers(&self.layers, self.num_classes)),
+            optimizer_state: self.optimizer_state.clone(),
         };
 
         Self::write_snapshot(&snapshot, path)
@@ -190,6 +310,7 @@ impl Checkpointable for ChromaticNetwork {
 
     fn load_checkpoint<P: AsRef<std::path::Path>>(path: P) -> Result<Self, CheckpointError> {
         let snapshot: ChromaticNetworkCheckpoint = Self::read_snapshot(path)?;
+        let mut snapshot = snapshot;
         if snapshot.version != NETWORK_CHECKPOINT_VERSION {
             return Err(CheckpointError::VersionMismatch {
                 expected: NETWORK_CHECKPOINT_VERSION,
@@ -197,9 +318,16 @@ impl Checkpointable for ChromaticNetwork {
             });
         }
 
+        let config = snapshot
+            .config
+            .take()
+            .unwrap_or_else(|| NetworkConfigSnapshot::from_layers(&snapshot.layers, snapshot.num_classes));
+        config.validate_layers(&snapshot.layers)?;
+
         Ok(Self {
             layers: snapshot.layers,
             num_classes: snapshot.num_classes,
+            optimizer_state: snapshot.optimizer_state,
         })
     }
 }
@@ -213,6 +341,7 @@ mod tests {
         let net = ChromaticNetwork::simple((16, 16, 4), 3, 42);
         assert_eq!(net.layers.len(), 2);
         assert_eq!(net.num_classes, 3);
+        assert!(net.optimizer_state().is_none());
     }
 
     #[test]
@@ -237,5 +366,52 @@ mod tests {
 
         // Loss should decrease (or at least change) after training
         assert_ne!(loss1, loss2);
+        assert!(net.optimizer_state().is_some());
+    }
+
+    #[test]
+    fn test_checkpoint_roundtrip_preserves_optimizer_state() {
+        use std::fs;
+
+        let mut net = ChromaticNetwork::simple((4, 4, 2), 2, 7);
+        let mut optimizer = SGDOptimizer::new(0.1, 0.9, 0.0001);
+        let input = ChromaticTensor::from_seed(10, 4, 4, 2);
+        let label = 1;
+        let _ = net.train_step(&input, label, &mut optimizer);
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "chromatic_network_checkpoint_{}.bin",
+            uuid::Uuid::new_v4()
+        ));
+
+        net.save_checkpoint(&path).expect("save checkpoint");
+        let restored = ChromaticNetwork::load_checkpoint(&path).expect("load checkpoint");
+        fs::remove_file(&path).ok();
+
+        assert!(matches!(
+            restored.optimizer_state(),
+            Some(OptimizerStateSnapshot::Sgd(_))
+        ));
+        assert_eq!(restored.layers.len(), net.layers.len());
+    }
+
+    #[test]
+    fn test_config_validation_detects_mismatch() {
+        let layers = vec![
+            ChromaticLayer::new(2, 2, 1, ChromaticOp::Mix, 1),
+            ChromaticLayer::new(2, 2, 1, ChromaticOp::Filter, 2),
+        ];
+
+        let mut config = NetworkConfigSnapshot::from_layers(&layers, 2);
+        config.layer_configs[0].operation = ChromaticOp::Saturate;
+
+        let err = config.validate_layers(&layers).expect_err("mismatch");
+        match err {
+            CheckpointError::InvalidFormat(msg) => {
+                assert!(msg.contains("Layer operation mismatch"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::tensor::ChromaticTensor;
+use serde::{Deserialize, Serialize};
 
 /// Stochastic Gradient Descent optimizer with momentum.
 ///
@@ -11,6 +12,32 @@ use crate::tensor::ChromaticTensor;
 /// velocity = momentum * velocity + learning_rate * gradient
 /// parameter = parameter - velocity
 /// ```
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SGDOptimizerState {
+    pub learning_rate: f32,
+    pub momentum: f32,
+    pub weight_decay: f32,
+    pub velocities: HashMap<String, ChromaticTensor>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AdamOptimizerState {
+    pub learning_rate: f32,
+    pub beta1: f32,
+    pub beta2: f32,
+    pub epsilon: f32,
+    pub weight_decay: f32,
+    pub first_moments: HashMap<String, ChromaticTensor>,
+    pub second_moments: HashMap<String, ChromaticTensor>,
+    pub t: usize,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum OptimizerStateSnapshot {
+    Sgd(SGDOptimizerState),
+    Adam(AdamOptimizerState),
+}
+
 pub struct SGDOptimizer {
     /// Learning rate
     pub learning_rate: f32,
@@ -45,6 +72,22 @@ impl SGDOptimizer {
             weight_decay,
             velocities: HashMap::new(),
         }
+    }
+
+    pub fn to_state(&self) -> SGDOptimizerState {
+        SGDOptimizerState {
+            learning_rate: self.learning_rate,
+            momentum: self.momentum,
+            weight_decay: self.weight_decay,
+            velocities: self.velocities.clone(),
+        }
+    }
+
+    pub fn apply_state(&mut self, state: SGDOptimizerState) {
+        self.learning_rate = state.learning_rate;
+        self.momentum = state.momentum;
+        self.weight_decay = state.weight_decay;
+        self.velocities = state.velocities;
     }
 
     /// Updates a parameter using accumulated gradients.
@@ -121,6 +164,30 @@ impl AdamOptimizer {
             second_moments: HashMap::new(),
             t: 0,
         }
+    }
+
+    pub fn to_state(&self) -> AdamOptimizerState {
+        AdamOptimizerState {
+            learning_rate: self.learning_rate,
+            beta1: self.beta1,
+            beta2: self.beta2,
+            epsilon: self.epsilon,
+            weight_decay: self.weight_decay,
+            first_moments: self.first_moments.clone(),
+            second_moments: self.second_moments.clone(),
+            t: self.t,
+        }
+    }
+
+    pub fn apply_state(&mut self, state: AdamOptimizerState) {
+        self.learning_rate = state.learning_rate;
+        self.beta1 = state.beta1;
+        self.beta2 = state.beta2;
+        self.epsilon = state.epsilon;
+        self.weight_decay = state.weight_decay;
+        self.first_moments = state.first_moments;
+        self.second_moments = state.second_moments;
+        self.t = state.t;
     }
 
     /// Updates a parameter using Adam algorithm.
