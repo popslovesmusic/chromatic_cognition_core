@@ -173,6 +173,8 @@ pub struct SimpleDreamPool {
     query_cache: QueryCache,
     /// Phase 4 Optimization: Memory budget tracker for automatic eviction
     memory_budget: Option<MemoryBudget>,
+    /// Number of entries evicted since the last index rebuild/invalidation
+    evictions_since_rebuild: usize,
 }
 
 impl SimpleDreamPool {
@@ -196,6 +198,7 @@ impl SimpleDreamPool {
             entry_ids: VecDeque::with_capacity(max_size),
             query_cache: QueryCache::new(128), // Cache last 128 queries (~40 KB)
             memory_budget,
+            evictions_since_rebuild: 0,
         }
     }
 
@@ -206,7 +209,7 @@ impl SimpleDreamPool {
             return;
         }
 
-        let mut evicted_any = false;
+        let mut evicted_count = 0usize;
 
         for _ in 0..count {
             let old_entry = match self.entries.pop_front() {
@@ -214,7 +217,7 @@ impl SimpleDreamPool {
                 None => break,
             };
 
-            evicted_any = true;
+            evicted_count += 1;
 
             if let Some(ref mut budget) = self.memory_budget {
                 let old_size = estimate_entry_size(&old_entry);
@@ -237,9 +240,11 @@ impl SimpleDreamPool {
             }
         }
 
-        if evicted_any {
-            self.soft_index = None;
-            self.hnsw_index = None;
+        if evicted_count > 0 {
+            self.evictions_since_rebuild = self
+                .evictions_since_rebuild
+                .saturating_add(evicted_count);
+            self.maybe_invalidate_indices();
         }
     }
 
@@ -301,12 +306,34 @@ impl SimpleDreamPool {
             budget.add_entry(entry_size);
         }
 
+<<<<<<< ours
         self.soft_index = None;
         self.hnsw_index = None;
+=======
+        self.maybe_invalidate_indices();
+>>>>>>> theirs
 
         true
     }
 
+<<<<<<< ours
+=======
+    /// Drop all retrieval indices when eviction churn exceeds the configured threshold.
+    fn maybe_invalidate_indices(&mut self) {
+        let threshold = self.entries.len() / 10;
+        if self.evictions_since_rebuild > threshold {
+            self.invalidate_indices();
+        }
+    }
+
+    /// Clear both HNSW and linear indices and reset the eviction counter.
+    fn invalidate_indices(&mut self) {
+        self.hnsw_index = None;
+        self.soft_index = None;
+        self.evictions_since_rebuild = 0;
+    }
+
+>>>>>>> theirs
     /// Add a dream entry if it meets the coherence threshold
     ///
     /// Returns true if the dream was added, false otherwise.
@@ -709,6 +736,7 @@ impl SimpleDreamPool {
                 } else {
                     self.hnsw_index = Some(hnsw);
                     self.soft_index = None; // Clear linear index when using HNSW
+                    self.evictions_since_rebuild = 0;
                     return;
                 }
             }
@@ -734,6 +762,7 @@ impl SimpleDreamPool {
         index.build();
         self.soft_index = Some(index);
         self.hnsw_index = None; // Clear HNSW when using linear
+        self.evictions_since_rebuild = 0;
     }
 
     /// Retrieve dreams using soft index with hybrid scoring (Phase 4)

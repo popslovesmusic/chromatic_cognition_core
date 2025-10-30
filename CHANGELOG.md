@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evictions and index bookkeeping consistent across coherence-aware inserts.
 - Removed noisy HNSW eviction-path warnings so hot-path tracing remains clean while
   the ANN rebuild diagnostics retain their detailed instrumentation.
+<<<<<<< ours
+=======
+- Added an eviction-threshold counter so ANN/soft indices are only invalidated after
+  churn surpasses 10% of the current pool, resetting rebuild markers once indices
+  are refreshed.
+>>>>>>> theirs
 
 ### Added - Spectral Accumulation Determinism
 - Introduced Q16.48 fixed-point accumulator with Neumaier-compensated, fixed tree

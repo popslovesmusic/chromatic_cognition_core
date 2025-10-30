@@ -56,6 +56,12 @@
   `[3×12×12×3]` processing unit.
 - HNSW eviction logging was trimmed from the hot path; rebuild instrumentation retains
   detailed diagnostics while routine inserts run without repetitive warnings.
+<<<<<<< ours
+=======
+- Index stabilization counters gate ANN/soft invalidation until eviction churn exceeds
+  10% of the live pool, resetting immediately after rebuilds to keep retrieval indices
+  fresh without thrashing.
+>>>>>>> theirs
 - Regression suite: `cargo test` exercises 210 unit tests, 7 integration tests, and 27 doctests in ~72s on CPU-only hardware (cold build compile time: 3m27s).
 - Detailed execution log captured in `docs/TEST_REPORT.md` with suite durations and reproduction steps.
 - Phase 5C ethics filter clips unsafe learning-rate, tint, and augmentation directives, rolls back on violations, and journals every decision to `logs/meta.jsonl`.
