@@ -96,7 +96,7 @@ mod tests {
             gamma = 1.0
 
             [bridge.spectral]
-            fft_size = 1024
+            fft_size = 4096
             categorical_count = 12
 
             [bridge.reversibility]
@@ -143,7 +143,7 @@ mod tests {
             gamma = 1.0
 
             [bridge.spectral]
-            fft_size = 1024
+            fft_size = 4096
             categorical_count = 12
 
             [bridge.reversibility]

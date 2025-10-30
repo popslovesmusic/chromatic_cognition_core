@@ -12,6 +12,7 @@ use crate::{
 
 const UMS_DIM: usize = 512;
 const SPECTRAL_BAND_DIM: usize = 256;
+const SPECTRAL_INPUT_BINS: usize = 2049;
 const HSL_DIM: usize = 128;
 
 #[derive(Clone, Copy, Debug)]
@@ -103,7 +104,11 @@ pub fn encode_to_ums(mapper: &ModalityMapper, tensor: &ChromaticTensor) -> Unifi
     channels.copy_from_slice(&stats.mu);
 
     let bin_count = mapper.config().spectral.fft_size / 2 + 1;
-    let spectral_bins = aggregate_spectral_bins(&spectral, bin_count.max(1));
+    assert_eq!(
+        bin_count, SPECTRAL_INPUT_BINS,
+        "UMS encoder expects {SPECTRAL_INPUT_BINS} spectral bins, got {bin_count}"
+    );
+    let spectral_bins = aggregate_spectral_bins(&spectral, bin_count);
     let spectral_projection = downsample_bins(&spectral_bins);
     channels[..SPECTRAL_BAND_DIM].copy_from_slice(&spectral_projection);
 
@@ -150,7 +155,8 @@ pub fn decode_from_ums(
 }
 
 fn aggregate_spectral_bins(spectral: &SpectralTensor, bin_count: usize) -> Vec<f32> {
-    let mut bins = vec![0.0f32; bin_count];
+    let mut sums = vec![0.0f32; bin_count];
+    let mut counts = vec![0u32; bin_count];
     let dims = spectral.components.dim();
     let f_min = spectral.f_min.max(f32::MIN_POSITIVE);
     let octave_span = spectral.octaves.max(f32::MIN_POSITIVE);
@@ -171,12 +177,26 @@ fn aggregate_spectral_bins(spectral: &SpectralTensor, bin_count: usize) -> Vec<f
                     index = last_index;
                 }
 
-                bins[index] += energy;
+                if let Some(sum) = sums.get_mut(index) {
+                    *sum += energy;
+                    counts[index] = counts[index].saturating_add(1);
+                }
             }
         }
     }
 
-    bins
+    sums.into_iter()
+        .zip(counts.into_iter())
+        .map(
+            |(sum, count)| {
+                if count == 0 {
+                    0.0
+                } else {
+                    sum / count as f32
+                }
+            },
+        )
+        .collect()
 }
 
 fn downsample_bins(bins: &[f32]) -> [f32; SPECTRAL_BAND_DIM] {
@@ -185,15 +205,18 @@ fn downsample_bins(bins: &[f32]) -> [f32; SPECTRAL_BAND_DIM] {
         return projection;
     }
 
-    let block_size = bins.len() as f32 / SPECTRAL_BAND_DIM as f32;
+    assert_eq!(
+        bins.len(),
+        SPECTRAL_INPUT_BINS,
+        "spectral projection requires {SPECTRAL_INPUT_BINS} bins"
+    );
+
+    let base = bins.len() / SPECTRAL_BAND_DIM;
+    let remainder = bins.len() % SPECTRAL_BAND_DIM;
+    let mut start = 0usize;
     for (band, value) in projection.iter_mut().enumerate() {
-        let start = (band as f32 * block_size).floor() as usize;
-        let mut end = ((band as f32 + 1.0) * block_size).floor() as usize;
-        if band == SPECTRAL_BAND_DIM - 1 {
-            end = bins.len();
-        }
-        let start = start.min(bins.len());
-        let end = end.max(start + 1).min(bins.len());
+        let extra = if band < remainder { 1 } else { 0 };
+        let end = (start + base + extra).min(bins.len());
         let slice = &bins[start..end];
         let mean = if slice.is_empty() {
             0.0
@@ -201,7 +224,9 @@ fn downsample_bins(bins: &[f32]) -> [f32; SPECTRAL_BAND_DIM] {
             deterministic_sum(slice) / slice.len() as f32
         };
         *value = mean;
+        start = end;
     }
+
     projection
 }
 
@@ -359,7 +384,7 @@ mod tests {
             sample_rate = 44100
 
             [bridge.spectral]
-            fft_size = 1024
+            fft_size = 4096
             accum_format = "Q16.48"
             reduction_mode = "pairwise_neumaier"
             categorical_count = 12
@@ -383,6 +408,50 @@ mod tests {
         let idx = UMS_DIM - 1;
         let denormalized = channels[idx] * safe_sigma(stats.sigma[idx]) + stats.mu[idx];
         assert!((denormalized - stats.mu[idx]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn spectral_downsampling_uses_fixed_block_means() {
+        let mut bins = vec![0.0f32; SPECTRAL_INPUT_BINS];
+        for (idx, value) in bins.iter_mut().enumerate() {
+            *value = idx as f32;
+        }
+
+        let projection = downsample_bins(&bins);
+
+        let base = SPECTRAL_INPUT_BINS / SPECTRAL_BAND_DIM;
+        let remainder = SPECTRAL_INPUT_BINS % SPECTRAL_BAND_DIM;
+        let mut start = 0usize;
+        for (band, value) in projection.iter().enumerate() {
+            let extra = if band < remainder { 1 } else { 0 };
+            let end = (start + base + extra).min(SPECTRAL_INPUT_BINS);
+            let slice = &bins[start..end];
+            let expected = if slice.is_empty() {
+                0.0
+            } else {
+                deterministic_sum(slice) / slice.len() as f32
+            };
+            assert!((value - expected).abs() < 1e-6);
+            start = end;
+        }
+    }
+
+    #[test]
+    fn aggregate_bins_average_energy_per_frequency() {
+        let mut spectral = SpectralTensor::with_epsilon(1, 1, 2, 110.0, 7.0, 0.05);
+        for layer in 0..2 {
+            spectral.components[[0, 0, layer, 0]] = 110.0;
+            spectral.components[[0, 0, layer, 1]] = 1.0;
+        }
+        spectral.components[[0, 0, 0, 2]] = 0.4;
+        spectral.components[[0, 0, 1, 2]] = 0.8;
+
+        let bins = aggregate_spectral_bins(&spectral, SPECTRAL_INPUT_BINS);
+        assert_eq!(bins.len(), SPECTRAL_INPUT_BINS);
+        assert!((bins[0] - 0.6).abs() < 1e-6);
+        for value in bins.iter().skip(1) {
+            assert_eq!(*value, 0.0);
+        }
     }
 
     #[test]
@@ -436,11 +505,7 @@ mod tests {
     #[test]
     fn encode_hsl_block_preserves_contextual_statistics() {
         let mut tensor = ChromaticTensor::new(3, 12, 12);
-        let colors = [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ];
+        let colors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
         for layer in 0..12 {
             let color = colors.get(layer).copied().unwrap_or([0.5, 0.5, 0.5]);

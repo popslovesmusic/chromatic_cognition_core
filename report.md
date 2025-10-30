@@ -36,10 +36,11 @@
 - High-level `ModalityMapper` now wraps the spectral bridge, wiring encode/decode flows
   through the loaded `BridgeConfig` and emitting JSON logs for every tensor conversion
   (`src/bridge/modality_map.rs`).
-- Unified Modality Space encoder (`bridge::modality_ums`) now performs deterministic
-  2049→256 spectral block-mean downsampling, maps hue to [-1,1] radians, copies the
-  Chronicle affective priors, and normalises each channel with Chronicle-provided μ/σ
-  arrays while decode verifies categorical consensus via `map_hue_to_category`.
+- Unified Modality Space encoder (`bridge::modality_ums`) now enforces the Chronicle
+  2049-bin spectral layout, averages per-bin energy before deterministic 2049→256
+  block means, maps hue to [-1,1], seeds the affective channels from Chronicle μ, and
+  normalises every component with Chronicle-provided μ/σ while regression tests verify
+  aggregation stability and categorical consensus via `map_hue_to_category`.
 - Spectral feature extraction now routes all energy and entropy sums through a Q16.48
   fixed-point, Neumaier-compensated reduction tree with explicit round-to-even casting,
   keeping reorder deltas below 0.5 dB across platforms (`src/spectral/accumulate.rs`).

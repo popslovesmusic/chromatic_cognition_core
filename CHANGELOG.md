@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced categorical replication with deterministic 2049→256 spectral downsampling,
   per-channel Chronicle μ/σ normalization, and hue consensus checks via
   `ModalityMapper::map_hue_to_category`.
+- Hardened the UMS encoder to require the 2049-bin Chronicle layout, average spectral
+  energy before block means, seed the affective prior block from Chronicle μ, and add
+  regression tests covering spectral aggregation and fixed block windowing.
 
 ### Added - Native Rust Solver
 
