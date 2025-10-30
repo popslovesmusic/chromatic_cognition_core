@@ -121,7 +121,8 @@ impl EmbeddingMapper {
             // Dominant frequency (averaged across RGB)
             let dom_freq_mean = (spectral.dominant_frequencies[0] as f32
                 + spectral.dominant_frequencies[1] as f32
-                + spectral.dominant_frequencies[2] as f32) / 3.0;
+                + spectral.dominant_frequencies[2] as f32)
+                / 3.0;
             features.push(dom_freq_mean);
         }
 
@@ -183,7 +184,8 @@ impl EmbeddingMapper {
 
                 let dom_freq_mean = (spectral.dominant_frequencies[0] as f32
                     + spectral.dominant_frequencies[1] as f32
-                    + spectral.dominant_frequencies[2] as f32) / 3.0;
+                    + spectral.dominant_frequencies[2] as f32)
+                    / 3.0;
                 features.push(dom_freq_mean);
             } else {
                 features.extend_from_slice(&[0.0; 6]);
@@ -251,8 +253,8 @@ impl EmbeddingMapper {
 
         // Layer normalization: (x - mean) / std
         let mean = projected.iter().sum::<f32>() / projected.len() as f32;
-        let variance = projected.iter().map(|&x| (x - mean).powi(2)).sum::<f32>()
-            / projected.len() as f32;
+        let variance =
+            projected.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / projected.len() as f32;
         let std = (variance + 1e-8).sqrt(); // Add epsilon for numerical stability
 
         projected.iter().map(|&x| (x - mean) / std).collect()
@@ -367,8 +369,8 @@ mod tests {
 
         // Check layer norm properties: mean ≈ 0, std ≈ 1
         let mean = embedding.iter().sum::<f32>() / embedding.len() as f32;
-        let variance = embedding.iter().map(|&x| (x - mean).powi(2)).sum::<f32>()
-            / embedding.len() as f32;
+        let variance =
+            embedding.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / embedding.len() as f32;
         let std = variance.sqrt();
 
         assert!(mean.abs() < 0.01); // Mean should be ~0

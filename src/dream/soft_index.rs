@@ -3,6 +3,7 @@
 //! In-memory ANN-lite supporting cosine and euclidean similarity.
 
 use crate::dream::error::{DreamError, DreamResult};
+use serde::{Deserialize, Serialize};
 
 /// Unique identifier for indexed entries
 pub type EntryId = uuid::Uuid;
@@ -31,6 +32,15 @@ pub struct SoftIndex {
     norms: Vec<f32>,
 }
 
+/// Serializable snapshot of a [`SoftIndex`].
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct SoftIndexSnapshot {
+    dim: usize,
+    ids: Vec<EntryId>,
+    vecs: Vec<Vec<f32>>,
+    norms: Vec<f32>,
+}
+
 impl SoftIndex {
     /// Create a new soft index
     pub fn new(dim: usize) -> Self {
@@ -52,7 +62,7 @@ impl SoftIndex {
             return Err(DreamError::dimension_mismatch(
                 self.dim,
                 vec.len(),
-                "SoftIndex add"
+                "SoftIndex add",
             ));
         }
 
@@ -72,12 +82,17 @@ impl SoftIndex {
     /// # Errors
     ///
     /// Returns `DimensionMismatch` if query dimension doesn't match index dimension
-    pub fn query(&self, query: &[f32], k: usize, mode: Similarity) -> DreamResult<Vec<(EntryId, f32)>> {
+    pub fn query(
+        &self,
+        query: &[f32],
+        k: usize,
+        mode: Similarity,
+    ) -> DreamResult<Vec<(EntryId, f32)>> {
         if query.len() != self.dim {
             return Err(DreamError::dimension_mismatch(
                 self.dim,
                 query.len(),
-                "SoftIndex query"
+                "SoftIndex query",
             ));
         }
 
@@ -87,7 +102,8 @@ impl SoftIndex {
 
         // Compute similarities
         let query_norm = l2_norm(query);
-        let mut scores: Vec<(usize, f32)> = self.vecs
+        let mut scores: Vec<(usize, f32)> = self
+            .vecs
             .iter()
             .enumerate()
             .map(|(idx, vec)| {
@@ -125,6 +141,26 @@ impl SoftIndex {
         self.ids.clear();
         self.vecs.clear();
         self.norms.clear();
+    }
+
+    /// Capture the full state of the index for checkpointing.
+    pub(crate) fn snapshot(&self) -> SoftIndexSnapshot {
+        SoftIndexSnapshot {
+            dim: self.dim,
+            ids: self.ids.clone(),
+            vecs: self.vecs.clone(),
+            norms: self.norms.clone(),
+        }
+    }
+
+    /// Rebuild an index from a previously captured snapshot.
+    pub(crate) fn from_snapshot(snapshot: SoftIndexSnapshot) -> Self {
+        Self {
+            dim: snapshot.dim,
+            ids: snapshot.ids,
+            vecs: snapshot.vecs,
+            norms: snapshot.norms,
+        }
     }
 }
 

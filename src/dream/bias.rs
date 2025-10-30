@@ -294,10 +294,7 @@ fn synthesize_spectral_biases(aggregator: &UtilityAggregator) -> SpectralBias {
 }
 
 /// Synthesize chromatic signature biases from feedback.
-fn synthesize_chroma_biases(
-    aggregator: &UtilityAggregator,
-    utility_threshold: f32,
-) -> ChromaBias {
+fn synthesize_chroma_biases(aggregator: &UtilityAggregator, utility_threshold: f32) -> ChromaBias {
     // Get helpful dreams
     let helpful = aggregator.filter_by_utility(utility_threshold);
 

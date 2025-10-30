@@ -3,11 +3,11 @@
 //! Implements a simple MLP (Multi-Layer Perceptron) for classifying
 //! ChromaticTensor inputs into 10 color classes.
 
-use crate::tensor::ChromaticTensor;
 use crate::data::ColorClass;
+use crate::tensor::ChromaticTensor;
 use ndarray::{Array1, Array2};
 use rand::{Rng, SeedableRng};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Configuration for the classifier
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,18 +90,16 @@ impl MLPClassifier {
 
         // Xavier initialization for weights
         let w1_scale = (2.0 / config.input_size as f32).sqrt();
-        let w1 = Array2::from_shape_fn(
-            (config.hidden_size, config.input_size),
-            |_| (rng.gen::<f32>() - 0.5) * 2.0 * w1_scale,
-        );
+        let w1 = Array2::from_shape_fn((config.hidden_size, config.input_size), |_| {
+            (rng.gen::<f32>() - 0.5) * 2.0 * w1_scale
+        });
 
         let b1 = Array1::zeros(config.hidden_size);
 
         let w2_scale = (2.0 / config.hidden_size as f32).sqrt();
-        let w2 = Array2::from_shape_fn(
-            (config.output_size, config.hidden_size),
-            |_| (rng.gen::<f32>() - 0.5) * 2.0 * w2_scale,
-        );
+        let w2 = Array2::from_shape_fn((config.output_size, config.hidden_size), |_| {
+            (rng.gen::<f32>() - 0.5) * 2.0 * w2_scale
+        });
 
         let b2 = Array1::zeros(config.output_size);
 
@@ -265,14 +263,16 @@ impl ColorClassifier for MLPClassifier {
         self.w1 = Array2::from_shape_vec(
             (self.config.hidden_size, self.config.input_size),
             weights.w1,
-        ).expect("Invalid w1 shape");
+        )
+        .expect("Invalid w1 shape");
 
         self.b1 = Array1::from_vec(weights.b1);
 
         self.w2 = Array2::from_shape_vec(
             (self.config.output_size, self.config.hidden_size),
             weights.w2,
-        ).expect("Invalid w2 shape");
+        )
+        .expect("Invalid w2 shape");
 
         self.b2 = Array1::from_vec(weights.b2);
     }
@@ -321,10 +321,19 @@ mod tests {
         let prediction = classifier.predict(&tensor);
 
         // Should return a valid color class
-        assert!(matches!(prediction, ColorClass::Red | ColorClass::Green |
-                        ColorClass::Blue | ColorClass::Yellow | ColorClass::Cyan |
-                        ColorClass::Magenta | ColorClass::Orange | ColorClass::Purple |
-                        ColorClass::White | ColorClass::Black));
+        assert!(matches!(
+            prediction,
+            ColorClass::Red
+                | ColorClass::Green
+                | ColorClass::Blue
+                | ColorClass::Yellow
+                | ColorClass::Cyan
+                | ColorClass::Magenta
+                | ColorClass::Orange
+                | ColorClass::Purple
+                | ColorClass::White
+                | ColorClass::Black
+        ));
     }
 
     #[test]
@@ -340,7 +349,12 @@ mod tests {
         };
         let dataset = ColorDataset::generate(dataset_config);
 
-        let tensors: Vec<_> = dataset.samples.iter().take(5).map(|s| s.tensor.clone()).collect();
+        let tensors: Vec<_> = dataset
+            .samples
+            .iter()
+            .take(5)
+            .map(|s| s.tensor.clone())
+            .collect();
         let labels: Vec<_> = dataset.samples.iter().take(5).map(|s| s.label).collect();
 
         let (loss, gradients) = classifier.compute_loss(&tensors, &labels);
@@ -375,7 +389,12 @@ mod tests {
         };
         let dataset = ColorDataset::generate(dataset_config);
 
-        let tensors: Vec<_> = dataset.samples.iter().take(2).map(|s| s.tensor.clone()).collect();
+        let tensors: Vec<_> = dataset
+            .samples
+            .iter()
+            .take(2)
+            .map(|s| s.tensor.clone())
+            .collect();
         let labels: Vec<_> = dataset.samples.iter().take(2).map(|s| s.label).collect();
 
         let (_, gradients) = classifier.compute_loss(&tensors, &labels);
@@ -384,6 +403,10 @@ mod tests {
         classifier.update_weights(&gradients, 0.01);
 
         // Weights should have changed
-        assert!(classifier.w1.iter().zip(initial_w1.iter()).any(|(a, b)| (a - b).abs() > 1e-6));
+        assert!(classifier
+            .w1
+            .iter()
+            .zip(initial_w1.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6));
     }
 }

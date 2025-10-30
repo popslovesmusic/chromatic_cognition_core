@@ -8,7 +8,6 @@
 ///
 /// **Solution:** MMR balances relevance (similarity to query) with diversity
 /// (dissimilarity to already-selected dreams).
-
 use crate::dream::simple_pool::DreamEntry;
 
 /// Compute pairwise chromatic dispersion between dream entries.
@@ -228,7 +227,9 @@ pub fn retrieve_diverse_mmr(
                 (idx, score)
             })
             .max_by(|(_, score_a), (_, score_b)| {
-                score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
+                score_a
+                    .partial_cmp(score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap();
 
@@ -316,14 +317,18 @@ pub fn retrieve_diverse_mmr_fast(
                 // Small selected set or no sampling: compute exact
                 selected
                     .iter()
-                    .map(|s: &DreamEntry| cosine_similarity(&candidate.chroma_signature, &s.chroma_signature))
+                    .map(|s: &DreamEntry| {
+                        cosine_similarity(&candidate.chroma_signature, &s.chroma_signature)
+                    })
                     .fold(f32::NEG_INFINITY, f32::max)
             } else {
                 // Large selected set: sample
                 selected
                     .iter()
                     .step_by(selected.len() / sample_size)
-                    .map(|s: &DreamEntry| cosine_similarity(&candidate.chroma_signature, &s.chroma_signature))
+                    .map(|s: &DreamEntry| {
+                        cosine_similarity(&candidate.chroma_signature, &s.chroma_signature)
+                    })
                     .fold(f32::NEG_INFINITY, f32::max)
             };
 
@@ -384,10 +389,8 @@ impl DiversityStats {
 
         for i in 0..n {
             for j in (i + 1)..n {
-                let dist = euclidean_distance(
-                    &dreams[i].chroma_signature,
-                    &dreams[j].chroma_signature,
-                );
+                let dist =
+                    euclidean_distance(&dreams[i].chroma_signature, &dreams[j].chroma_signature);
                 distances.push(dist);
             }
         }
@@ -513,8 +516,11 @@ mod tests {
         // Second should be diverse (green or blue, not red-ish)
         let sig1 = selected[1].chroma_signature;
         // Either green (sig1[1] > 0.5) or blue (sig1[2] > 0.5)
-        assert!(sig1[1] > 0.5 || sig1[2] > 0.5,
-                "Second selection should be diverse (green or blue), got {:?}", sig1);
+        assert!(
+            sig1[1] > 0.5 || sig1[2] > 0.5,
+            "Second selection should be diverse (green or blue), got {:?}",
+            sig1
+        );
     }
 
     #[test]
@@ -578,10 +584,10 @@ mod tests {
     fn test_retrieve_diverse_mmr_fast_early_termination() {
         // Test that low-similarity candidates are skipped
         let candidates = vec![
-            make_dream([1.0, 0.0, 0.0]),   // Red (relevant)
-            make_dream([0.9, 0.1, 0.0]),   // Red-ish (relevant)
-            make_dream([0.0, 1.0, 0.0]),   // Green (low similarity to red)
-            make_dream([0.0, 0.0, 1.0]),   // Blue (low similarity to red)
+            make_dream([1.0, 0.0, 0.0]), // Red (relevant)
+            make_dream([0.9, 0.1, 0.0]), // Red-ish (relevant)
+            make_dream([0.0, 1.0, 0.0]), // Green (low similarity to red)
+            make_dream([0.0, 0.0, 1.0]), // Blue (low similarity to red)
         ];
         let query = [1.0, 0.0, 0.0]; // Red query
 
@@ -698,10 +704,7 @@ mod tests {
 
     #[test]
     fn test_retrieve_diverse_mmr_fast_fewer_candidates_than_k() {
-        let candidates = vec![
-            make_dream([1.0, 0.0, 0.0]),
-            make_dream([0.0, 1.0, 0.0]),
-        ];
+        let candidates = vec![make_dream([1.0, 0.0, 0.0]), make_dream([0.0, 1.0, 0.0])];
         let query = [1.0, 0.0, 0.0];
 
         // Request more than available

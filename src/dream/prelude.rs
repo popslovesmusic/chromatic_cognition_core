@@ -61,5 +61,5 @@ pub use crate::dream::bias::BiasProfile;
 pub use crate::dream::experiment::ExperimentHarness;
 
 // Commonly used enums
-pub use crate::dream::soft_index::Similarity;
 pub use crate::data::ColorClass;
+pub use crate::dream::soft_index::Similarity;

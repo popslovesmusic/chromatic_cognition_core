@@ -9,11 +9,11 @@
 //! ```
 
 use chromatic_cognition_core::data::DatasetConfig;
-use chromatic_cognition_core::dream::simple_pool::PoolConfig;
+use chromatic_cognition_core::dream::analysis::{compare_experiments, generate_report};
 use chromatic_cognition_core::dream::experiment::{
     ExperimentConfig, ExperimentHarness, SeedingStrategy,
 };
-use chromatic_cognition_core::dream::analysis::{compare_experiments, generate_report};
+use chromatic_cognition_core::dream::simple_pool::PoolConfig;
 use chromatic_cognition_core::ChromaticNativeSolver;
 use std::fs::File;
 use std::io::Write;
@@ -49,7 +49,10 @@ fn main() {
     println!("  Total Samples: {}", dataset_config.samples_per_class * 10);
     println!("  Epochs: {}", num_epochs);
     println!("  Dream Iterations: {}", dream_iterations);
-    println!("  Pool Coherence Threshold: {}\n", pool_config.coherence_threshold);
+    println!(
+        "  Pool Coherence Threshold: {}\n",
+        pool_config.coherence_threshold
+    );
 
     // ========================================================================
     // Group A: Control (Random Noise)
@@ -158,15 +161,17 @@ fn main() {
 
     // Save raw results
     let json_a = serde_json::to_string_pretty(&result_a).expect("Failed to serialize Group A");
-    let mut file_a =
-        File::create("logs/validation_group_a.json").expect("Failed to create file");
-    file_a.write_all(json_a.as_bytes()).expect("Failed to write");
+    let mut file_a = File::create("logs/validation_group_a.json").expect("Failed to create file");
+    file_a
+        .write_all(json_a.as_bytes())
+        .expect("Failed to write");
     println!("✓ Group A results: logs/validation_group_a.json");
 
     let json_b = serde_json::to_string_pretty(&result_b).expect("Failed to serialize Group B");
-    let mut file_b =
-        File::create("logs/validation_group_b.json").expect("Failed to create file");
-    file_b.write_all(json_b.as_bytes()).expect("Failed to write");
+    let mut file_b = File::create("logs/validation_group_b.json").expect("Failed to create file");
+    file_b
+        .write_all(json_b.as_bytes())
+        .expect("Failed to write");
     println!("✓ Group B results: logs/validation_group_b.json");
 
     // Save comparison
@@ -190,17 +195,29 @@ fn main() {
     // ========================================================================
     // Generate CSV for plotting
     // ========================================================================
-    let mut csv = String::from("epoch,group_a_accuracy,group_b_accuracy,group_a_coherence,group_b_coherence\n");
-    for (a, b) in result_a.epoch_metrics.iter().zip(result_b.epoch_metrics.iter()) {
+    let mut csv = String::from(
+        "epoch,group_a_accuracy,group_b_accuracy,group_a_coherence,group_b_coherence\n",
+    );
+    for (a, b) in result_a
+        .epoch_metrics
+        .iter()
+        .zip(result_b.epoch_metrics.iter())
+    {
         csv.push_str(&format!(
             "{},{},{},{},{}\n",
-            a.epoch, a.validation_accuracy, b.validation_accuracy, a.mean_coherence, b.mean_coherence
+            a.epoch,
+            a.validation_accuracy,
+            b.validation_accuracy,
+            a.mean_coherence,
+            b.mean_coherence
         ));
     }
 
     let mut csv_file =
         File::create("logs/validation_metrics.csv").expect("Failed to create CSV file");
-    csv_file.write_all(csv.as_bytes()).expect("Failed to write CSV");
+    csv_file
+        .write_all(csv.as_bytes())
+        .expect("Failed to write CSV");
     println!("✓ Metrics CSV: logs/validation_metrics.csv");
 
     println!("\n┌─────────────────────────────────────────────────────────────┐");
@@ -210,15 +227,24 @@ fn main() {
     // Final decision
     if comparison.is_significant {
         println!("\n🎉 SUCCESS: Retrieval hypothesis VALIDATED!");
-        println!("   ✓ Improvement: {:.2}%", comparison.accuracy_improvement_pct);
-        println!("   ✓ Statistically significant (p < {})", comparison.significance_level);
+        println!(
+            "   ✓ Improvement: {:.2}%",
+            comparison.accuracy_improvement_pct
+        );
+        println!(
+            "   ✓ Statistically significant (p < {})",
+            comparison.significance_level
+        );
         println!("\n   → RECOMMENDATION: Proceed to Phase 2");
         println!("     • Implement SQLite persistence");
         println!("     • Add FFT spectral analysis");
         println!("     • Develop full Dream Pool specification");
     } else if comparison.accuracy_improvement > 0.0 {
         println!("\n⚠️  MARGINAL: Hypothesis weakly supported");
-        println!("   • Improvement: {:.2}%", comparison.accuracy_improvement_pct);
+        println!(
+            "   • Improvement: {:.2}%",
+            comparison.accuracy_improvement_pct
+        );
         println!("   • Below significance threshold");
         println!("\n   → RECOMMENDATION: Investigate further");
         println!("     • Tune hyperparameters");

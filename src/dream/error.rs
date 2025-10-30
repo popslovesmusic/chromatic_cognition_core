@@ -19,15 +19,10 @@ pub enum DreamError {
     },
 
     /// Index has not been built yet
-    IndexNotBuilt {
-        operation: String,
-    },
+    IndexNotBuilt { operation: String },
 
     /// Pool has reached capacity
-    CapacityExceeded {
-        current: usize,
-        max: usize,
-    },
+    CapacityExceeded { current: usize, max: usize },
 
     /// Invalid configuration parameter
     InvalidConfiguration {
@@ -37,9 +32,7 @@ pub enum DreamError {
     },
 
     /// Empty pool or candidate set
-    EmptyCollection {
-        collection: String,
-    },
+    EmptyCollection { collection: String },
 
     /// Invalid parameter value
     InvalidParameter {
@@ -49,27 +42,23 @@ pub enum DreamError {
     },
 
     /// Index corruption detected
-    IndexCorrupted {
-        details: String,
-    },
+    IndexCorrupted { details: String },
 
     /// Memory budget exceeded
-    MemoryExceeded {
-        requested: usize,
-        available: usize,
-    },
+    MemoryExceeded { requested: usize, available: usize },
 
     /// Operation requires a feature that is not available
-    FeatureUnavailable {
-        feature: String,
-        reason: String,
-    },
+    FeatureUnavailable { feature: String, reason: String },
 }
 
 impl fmt::Display for DreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DreamError::DimensionMismatch { expected, got, context } => {
+            DreamError::DimensionMismatch {
+                expected,
+                got,
+                context,
+            } => {
                 write!(
                     f,
                     "Dimension mismatch in {}: expected {} dimensions, got {}",
@@ -90,7 +79,11 @@ impl fmt::Display for DreamError {
                     current, max
                 )
             }
-            DreamError::InvalidConfiguration { parameter, value, reason } => {
+            DreamError::InvalidConfiguration {
+                parameter,
+                value,
+                reason,
+            } => {
                 write!(
                     f,
                     "Invalid configuration for parameter '{}' with value '{}': {}",
@@ -100,7 +93,11 @@ impl fmt::Display for DreamError {
             DreamError::EmptyCollection { collection } => {
                 write!(f, "Empty collection: {}", collection)
             }
-            DreamError::InvalidParameter { parameter, value, constraint } => {
+            DreamError::InvalidParameter {
+                parameter,
+                value,
+                constraint,
+            } => {
                 write!(
                     f,
                     "Invalid parameter '{}' = '{}': must satisfy {}",
@@ -110,7 +107,10 @@ impl fmt::Display for DreamError {
             DreamError::IndexCorrupted { details } => {
                 write!(f, "Index corrupted: {}", details)
             }
-            DreamError::MemoryExceeded { requested, available } => {
+            DreamError::MemoryExceeded {
+                requested,
+                available,
+            } => {
                 write!(
                     f,
                     "Memory budget exceeded: requested {} bytes, only {} available",

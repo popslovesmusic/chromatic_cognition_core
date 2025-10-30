@@ -97,17 +97,18 @@ impl SGDOptimizer {
     /// * `param_name` - Unique identifier for this parameter
     /// * `param` - Parameter tensor to update (modified in-place)
     /// * `gradient` - Gradient tensor
-    pub fn step(&mut self, param_name: &str, param: &mut ChromaticTensor, gradient: &ChromaticTensor) {
+    pub fn step(
+        &mut self,
+        param_name: &str,
+        param: &mut ChromaticTensor,
+        gradient: &ChromaticTensor,
+    ) {
         // Get or initialize velocity for this parameter
         let velocity = self
             .velocities
             .entry(param_name.to_string())
             .or_insert_with(|| {
-                ChromaticTensor::new(
-                    param.shape().0,
-                    param.shape().1,
-                    param.shape().2,
-                )
+                ChromaticTensor::new(param.shape().0, param.shape().1, param.shape().2)
             });
 
         // Apply weight decay (L2 regularization)
@@ -191,7 +192,12 @@ impl AdamOptimizer {
     }
 
     /// Updates a parameter using Adam algorithm.
-    pub fn step(&mut self, param_name: &str, param: &mut ChromaticTensor, gradient: &ChromaticTensor) {
+    pub fn step(
+        &mut self,
+        param_name: &str,
+        param: &mut ChromaticTensor,
+        gradient: &ChromaticTensor,
+    ) {
         self.t += 1;
 
         // Get or initialize moments
@@ -228,7 +234,9 @@ impl AdamOptimizer {
 
         // Update parameter: param = param - lr * m_hat / (sqrt(v_hat) + epsilon)
         let v_sqrt = element_wise_sqrt(&v_hat);
-        let denominator = v_sqrt + ChromaticTensor::new(param.shape().0, param.shape().1, param.shape().2) * self.epsilon;
+        let denominator = v_sqrt
+            + ChromaticTensor::new(param.shape().0, param.shape().1, param.shape().2)
+                * self.epsilon;
         let update = element_wise_divide(&m_hat, &denominator) * self.learning_rate;
 
         *param = param.clone() - update;

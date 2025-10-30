@@ -5,8 +5,7 @@
 /// 2. Evaluate it with the native solver
 /// 3. Interpret energy, coherence, and violation metrics
 /// 4. Compute gradients for optimization
-
-use chromatic_cognition_core::{ChromaticTensor, ChromaticNativeSolver, Solver};
+use chromatic_cognition_core::{ChromaticNativeSolver, ChromaticTensor, Solver};
 
 fn main() {
     println!("=== Chromatic Field Solver Demo ===\n");
@@ -18,15 +17,27 @@ fn main() {
     println!("  lambda_tv (total variation): {}", solver.lambda_tv);
     println!("  lambda_sat (saturation penalty): {}", solver.lambda_sat);
     println!("  target_saturation: {}", solver.target_saturation);
-    println!("  discontinuity_threshold: {}\n", solver.discontinuity_threshold);
+    println!(
+        "  discontinuity_threshold: {}\n",
+        solver.discontinuity_threshold
+    );
 
     // Example 1: Smooth random field
     println!("--- Example 1: Smooth Random Field ---");
     let smooth_field = ChromaticTensor::from_seed(42, 8, 8, 2);
     let result = solver.evaluate(&smooth_field, false).expect("eval failed");
-    println!("Energy: {:.4} (total variation + saturation penalty)", result.energy);
-    println!("Coherence: {:.4} (0-1, higher = more harmonious)", result.coherence);
-    println!("Violation: {:.4} (0-1, lower = fewer constraint violations)\n", result.violation);
+    println!(
+        "Energy: {:.4} (total variation + saturation penalty)",
+        result.energy
+    );
+    println!(
+        "Coherence: {:.4} (0-1, higher = more harmonious)",
+        result.coherence
+    );
+    println!(
+        "Violation: {:.4} (0-1, lower = fewer constraint violations)\n",
+        result.violation
+    );
 
     // Example 2: High contrast field (checkerboard pattern)
     println!("--- Example 2: High Contrast Field ---");
@@ -49,9 +60,18 @@ fn main() {
     let checkerboard = ChromaticTensor::from_arrays(colors, certainty);
 
     let result = solver.evaluate(&checkerboard, false).expect("eval failed");
-    println!("Energy: {:.4} (high due to sharp transitions)", result.energy);
-    println!("Coherence: {:.4} (low due to extreme black/white)", result.coherence);
-    println!("Violation: {:.4} (low, colors in gamut)\n", result.violation);
+    println!(
+        "Energy: {:.4} (high due to sharp transitions)",
+        result.energy
+    );
+    println!(
+        "Coherence: {:.4} (low due to extreme black/white)",
+        result.coherence
+    );
+    println!(
+        "Violation: {:.4} (low, colors in gamut)\n",
+        result.violation
+    );
 
     // Example 3: Pure colors (high saturation)
     println!("--- Example 3: Pure RGB Colors ---");
@@ -63,9 +83,18 @@ fn main() {
     let pure_field = ChromaticTensor::from_arrays(pure_colors, certainty);
 
     let result = solver.evaluate(&pure_field, false).expect("eval failed");
-    println!("Energy: {:.4} (high saturation deviation from target)", result.energy);
-    println!("Coherence: {:.4} (complementary colors present)", result.coherence);
-    println!("Violation: {:.4} (high saturation flagged)\n", result.violation);
+    println!(
+        "Energy: {:.4} (high saturation deviation from target)",
+        result.energy
+    );
+    println!(
+        "Coherence: {:.4} (complementary colors present)",
+        result.coherence
+    );
+    println!(
+        "Violation: {:.4} (high saturation flagged)\n",
+        result.violation
+    );
 
     // Example 4: Out-of-gamut colors (constraint violation)
     println!("--- Example 4: Out-of-Gamut Colors ---");
@@ -80,7 +109,10 @@ fn main() {
     let result = solver.evaluate(&bad_field, false).expect("eval failed");
     println!("Energy: {:.4}", result.energy);
     println!("Coherence: {:.4}", result.coherence);
-    println!("Violation: {:.4} (HIGH - out-of-gamut colors detected)\n", result.violation);
+    println!(
+        "Violation: {:.4} (HIGH - out-of-gamut colors detected)\n",
+        result.violation
+    );
 
     // Example 5: Gradient computation
     println!("--- Example 5: Gradient Computation ---");

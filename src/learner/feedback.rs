@@ -245,11 +245,7 @@ impl UtilityAggregator {
         let pairs: Vec<(f32, f32)> = self
             .records
             .iter()
-            .filter_map(|r| {
-                r.spectral_features
-                    .as_ref()
-                    .map(|f| (f.entropy, r.utility))
-            })
+            .filter_map(|r| r.spectral_features.as_ref().map(|f| (f.entropy, r.utility)))
             .collect();
 
         if pairs.len() < 2 {
@@ -284,8 +280,8 @@ impl UtilityAggregator {
         // Compute mean utility and entropy per class
         for (class, records) in class_records {
             if let Some(stats) = self.class_stats.get_mut(&class) {
-                let mean_utility: f32 = records.iter().map(|r| r.utility).sum::<f32>()
-                    / records.len() as f32;
+                let mean_utility: f32 =
+                    records.iter().map(|r| r.utility).sum::<f32>() / records.len() as f32;
                 stats.mean_utility = mean_utility;
 
                 // Compute mean entropy if available
@@ -350,13 +346,7 @@ mod tests {
 
     #[test]
     fn test_feedback_record_creation() {
-        let record = FeedbackRecord::new(
-            [1.0, 0.0, 0.0],
-            Some(ColorClass::Red),
-            0.5,
-            0.3,
-            10,
-        );
+        let record = FeedbackRecord::new([1.0, 0.0, 0.0], Some(ColorClass::Red), 0.5, 0.3, 10);
 
         assert_eq!(record.chroma_signature, [1.0, 0.0, 0.0]);
         assert_eq!(record.class_label, Some(ColorClass::Red));
@@ -370,13 +360,7 @@ mod tests {
 
     #[test]
     fn test_feedback_record_harmful() {
-        let record = FeedbackRecord::new(
-            [0.0, 1.0, 0.0],
-            Some(ColorClass::Green),
-            0.3,
-            0.5,
-            10,
-        );
+        let record = FeedbackRecord::new([0.0, 1.0, 0.0], Some(ColorClass::Green), 0.3, 0.5, 10);
 
         assert!((record.delta_loss - 0.2).abs() < 0.01); // Loss increased (floating point)
         assert!(record.utility < 0.0); // Negative utility (harmful)
@@ -417,11 +401,29 @@ mod tests {
         let mut agg = UtilityAggregator::new();
 
         // Two helpful red dreams
-        agg.add_record(FeedbackRecord::new([1.0, 0.0, 0.0], Some(ColorClass::Red), 0.5, 0.3, 1));
-        agg.add_record(FeedbackRecord::new([0.9, 0.1, 0.0], Some(ColorClass::Red), 0.4, 0.2, 2));
+        agg.add_record(FeedbackRecord::new(
+            [1.0, 0.0, 0.0],
+            Some(ColorClass::Red),
+            0.5,
+            0.3,
+            1,
+        ));
+        agg.add_record(FeedbackRecord::new(
+            [0.9, 0.1, 0.0],
+            Some(ColorClass::Red),
+            0.4,
+            0.2,
+            2,
+        ));
 
         // One harmful green dream
-        agg.add_record(FeedbackRecord::new([0.0, 1.0, 0.0], Some(ColorClass::Green), 0.3, 0.5, 3));
+        agg.add_record(FeedbackRecord::new(
+            [0.0, 1.0, 0.0],
+            Some(ColorClass::Green),
+            0.3,
+            0.5,
+            3,
+        ));
 
         let red_stats = agg.class_stats(ColorClass::Red).unwrap();
         assert_eq!(red_stats.count, 2);

@@ -3,7 +3,9 @@
 //! This example trains a chromatic neural network to classify patterns
 //! into primary colors (red, green, blue).
 
-use chromatic_cognition_core::data::{generate_primary_color_dataset, shuffle_dataset, split_dataset};
+use chromatic_cognition_core::data::{
+    generate_primary_color_dataset, shuffle_dataset, split_dataset,
+};
 use chromatic_cognition_core::neural::{ChromaticNetwork, SGDOptimizer};
 use chromatic_cognition_core::tensor::gradient::GradientLayer;
 use std::path::PathBuf;
@@ -106,10 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Per-Class Performance:");
     let class_names = ["Red", "Green", "Blue"];
     for class in 0..num_classes {
-        let class_samples: Vec<_> = val_data
-            .iter()
-            .filter(|p| p.label == class)
-            .collect();
+        let class_samples: Vec<_> = val_data.iter().filter(|p| p.label == class).collect();
 
         if !class_samples.is_empty() {
             let class_inputs: Vec<_> = class_samples.iter().map(|p| p.tensor.clone()).collect();
@@ -133,16 +132,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gradient.to_png(PathBuf::from(&filename))?;
 
         let stats = output.statistics();
-        let predicted_class = if stats.mean_rgb[0] > stats.mean_rgb[1] && stats.mean_rgb[0] > stats.mean_rgb[2] {
-            0
-        } else if stats.mean_rgb[1] > stats.mean_rgb[2] {
-            1
-        } else {
-            2
-        };
+        let predicted_class =
+            if stats.mean_rgb[0] > stats.mean_rgb[1] && stats.mean_rgb[0] > stats.mean_rgb[2] {
+                0
+            } else if stats.mean_rgb[1] > stats.mean_rgb[2] {
+                1
+            } else {
+                2
+            };
 
-        let correct = if predicted_class == pattern.label { "✓" } else { "✗" };
-        println!("  {} Sample {}: True={}, Pred={}", correct, i, class_names[pattern.label], class_names[predicted_class]);
+        let correct = if predicted_class == pattern.label {
+            "✓"
+        } else {
+            "✗"
+        };
+        println!(
+            "  {} Sample {}: True={}, Pred={}",
+            correct, i, class_names[pattern.label], class_names[predicted_class]
+        );
     }
     println!();
 

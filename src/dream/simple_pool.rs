@@ -12,27 +12,35 @@ use crate::config::{
 use crate::data::ColorClass;
 use crate::dream::embedding::{EmbeddingMapper, QuerySignature};
 use crate::dream::error::{DreamError, DreamResult};
-use crate::dream::hnsw_index::HnswIndex;
+use crate::dream::hnsw_index::{HnswIndex, HnswIndexSnapshot};
 use crate::dream::hybrid_scoring::{rerank_hybrid, RetrievalWeights};
-use crate::dream::memory::{estimate_entry_size, MemoryBudget};
+use crate::dream::memory::{estimate_entry_size, MemoryBudget, MemoryBudgetSnapshot};
 use crate::dream::query_cache::QueryCache;
-use crate::dream::soft_index::{EntryId, Similarity, SoftIndex};
+use crate::dream::soft_index::{EntryId, Similarity, SoftIndex, SoftIndexSnapshot};
 use crate::solver::SolverResult;
 use crate::spectral::{extract_spectral_features, SpectralFeatures, WindowFunction};
 use crate::tensor::ChromaticTensor;
+use ndarray::{Array3, Array4};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
-use std::time::SystemTime;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::TryFrom;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const POOL_CHECKPOINT_VERSION: u32 = 1;
+const POOL_CHECKPOINT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct SimpleDreamPoolCheckpoint {
     version: u32,
     config: PoolConfig,
-    entries: Vec<DreamEntry>,
+    entries: Vec<DreamEntryCheckpoint>,
     entry_ids: Vec<EntryId>,
+    id_map: Vec<(EntryId, usize)>,
+    soft_index: Option<SoftIndexSnapshot>,
+    hnsw_index: Option<HnswIndexSnapshot>,
+    memory_budget: Option<MemoryBudgetSnapshot>,
+    evictions_since_rebuild: usize,
 }
 
 /// A stored dream entry with tensor and evaluation metrics
@@ -64,6 +72,42 @@ pub struct DreamEntry {
     pub ums_vector: Vec<f32>,
     /// Hue category index [0-11] for CSA partitioning (Phase 7)
     pub hue_category: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ChromaticTensorCheckpoint {
+    colors: Vec<f32>,
+    certainty: Vec<f32>,
+    rows: usize,
+    cols: usize,
+    layers: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DreamEntryCheckpoint {
+    tensor: ChromaticTensorCheckpoint,
+    result: SolverResultCheckpoint,
+    chroma_signature: [f32; 3],
+    class_label: Option<ColorClass>,
+    utility: Option<f32>,
+    timestamp_secs: i128,
+    timestamp_nanos: u32,
+    usage_count: usize,
+    spectral_features: SpectralFeatures,
+    embed: Option<Vec<f32>>,
+    util_mean: f32,
+    ums_vector: Vec<f32>,
+    hue_category: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SolverResultCheckpoint {
+    energy: f64,
+    coherence: f64,
+    violation: f64,
+    grad: Option<Vec<f32>>,
+    mask: Option<Vec<f32>>,
+    meta_json: Vec<u8>,
 }
 
 impl DreamEntry {
@@ -219,6 +263,173 @@ impl DreamEntry {
     }
 }
 
+fn encode_system_time(ts: SystemTime) -> (i128, u32) {
+    match ts.duration_since(UNIX_EPOCH) {
+        Ok(duration) => (duration.as_secs() as i128, duration.subsec_nanos()),
+        Err(err) => {
+            let duration = err.duration();
+            (-(duration.as_secs() as i128), duration.subsec_nanos())
+        }
+    }
+}
+
+fn decode_system_time(secs: i128, nanos: u32) -> Result<SystemTime, CheckpointError> {
+    if nanos >= 1_000_000_000 {
+        return Err(CheckpointError::InvalidFormat(
+            "Timestamp nanoseconds out of range".to_string(),
+        ));
+    }
+
+    if secs >= 0 {
+        let secs_u64 = u64::try_from(secs).map_err(|_| {
+            CheckpointError::InvalidFormat("Timestamp seconds overflow".to_string())
+        })?;
+        Ok(UNIX_EPOCH + Duration::new(secs_u64, nanos))
+    } else {
+        if secs == i128::MIN {
+            return Err(CheckpointError::InvalidFormat(
+                "Timestamp seconds underflow".to_string(),
+            ));
+        }
+        let abs_secs = (-secs) as i128;
+        let abs_secs_u64 = u64::try_from(abs_secs).map_err(|_| {
+            CheckpointError::InvalidFormat("Timestamp seconds overflow".to_string())
+        })?;
+        let duration = Duration::new(abs_secs_u64, nanos);
+        Ok(UNIX_EPOCH - duration)
+    }
+}
+
+impl DreamEntryCheckpoint {
+    fn capture(entry: &DreamEntry) -> Result<Self, CheckpointError> {
+        let (timestamp_secs, timestamp_nanos) = encode_system_time(entry.timestamp);
+        Ok(Self {
+            tensor: ChromaticTensorCheckpoint::from(&entry.tensor),
+            result: SolverResultCheckpoint::capture(&entry.result)?,
+            chroma_signature: entry.chroma_signature,
+            class_label: entry.class_label,
+            utility: entry.utility,
+            timestamp_secs,
+            timestamp_nanos,
+            usage_count: entry.usage_count,
+            spectral_features: entry.spectral_features.clone(),
+            embed: entry.embed.clone(),
+            util_mean: entry.util_mean,
+            ums_vector: entry.ums_vector.clone(),
+            hue_category: entry.hue_category,
+        })
+    }
+
+    fn into_entry(self) -> Result<DreamEntry, CheckpointError> {
+        let timestamp = decode_system_time(self.timestamp_secs, self.timestamp_nanos)?;
+        Ok(DreamEntry {
+            tensor: self.tensor.into_tensor()?,
+            result: self.result.into_result()?,
+            chroma_signature: self.chroma_signature,
+            class_label: self.class_label,
+            utility: self.utility,
+            timestamp,
+            usage_count: self.usage_count,
+            spectral_features: self.spectral_features,
+            embed: self.embed,
+            util_mean: self.util_mean,
+            ums_vector: self.ums_vector,
+            hue_category: self.hue_category,
+        })
+    }
+}
+
+impl SolverResultCheckpoint {
+    fn capture(result: &SolverResult) -> Result<Self, CheckpointError> {
+        let meta_json = serde_json::to_vec(&result.meta).map_err(|err| {
+            CheckpointError::InvalidFormat(format!(
+                "Failed to serialize solver metadata for checkpoint: {err}"
+            ))
+        })?;
+
+        Ok(Self {
+            energy: result.energy,
+            coherence: result.coherence,
+            violation: result.violation,
+            grad: result.grad.clone(),
+            mask: result.mask.clone(),
+            meta_json,
+        })
+    }
+
+    fn into_result(self) -> Result<SolverResult, CheckpointError> {
+        let meta = serde_json::from_slice(&self.meta_json).map_err(|err| {
+            CheckpointError::InvalidFormat(format!(
+                "Failed to deserialize solver metadata from checkpoint: {err}"
+            ))
+        })?;
+
+        Ok(SolverResult {
+            energy: self.energy,
+            coherence: self.coherence,
+            violation: self.violation,
+            grad: self.grad,
+            mask: self.mask,
+            meta,
+        })
+    }
+}
+
+impl From<&ChromaticTensor> for ChromaticTensorCheckpoint {
+    fn from(tensor: &ChromaticTensor) -> Self {
+        let (rows, cols, layers, _) = tensor.colors.dim();
+        Self {
+            colors: tensor.colors.iter().cloned().collect(),
+            certainty: tensor.certainty.iter().cloned().collect(),
+            rows,
+            cols,
+            layers,
+        }
+    }
+}
+
+impl ChromaticTensorCheckpoint {
+    fn into_tensor(self) -> Result<ChromaticTensor, CheckpointError> {
+        let color_len = self
+            .rows
+            .checked_mul(self.cols)
+            .and_then(|v| v.checked_mul(self.layers))
+            .and_then(|v| v.checked_mul(3))
+            .ok_or_else(|| {
+                CheckpointError::InvalidFormat("Tensor dimensions overflow".to_string())
+            })?;
+        if self.colors.len() != color_len {
+            return Err(CheckpointError::InvalidFormat(
+                "Color tensor length mismatch".to_string(),
+            ));
+        }
+
+        let certainty_len = self
+            .rows
+            .checked_mul(self.cols)
+            .and_then(|v| v.checked_mul(self.layers))
+            .ok_or_else(|| {
+                CheckpointError::InvalidFormat("Certainty tensor dimensions overflow".to_string())
+            })?;
+        if self.certainty.len() != certainty_len {
+            return Err(CheckpointError::InvalidFormat(
+                "Certainty tensor length mismatch".to_string(),
+            ));
+        }
+
+        let colors = Array4::from_shape_vec((self.rows, self.cols, self.layers, 3), self.colors)
+            .map_err(|_| {
+                CheckpointError::InvalidFormat("Invalid color tensor shape".to_string())
+            })?;
+        let certainty = Array3::from_shape_vec((self.rows, self.cols, self.layers), self.certainty)
+            .map_err(|_| {
+                CheckpointError::InvalidFormat("Invalid certainty tensor shape".to_string())
+            })?;
+
+        Ok(ChromaticTensor::from_arrays(colors, certainty))
+    }
+}
+
 /// Configuration for SimpleDreamPool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolConfig {
@@ -358,79 +569,6 @@ impl SimpleDreamPool {
         let embedding = ums.components().to_vec();
         entry.embed = Some(embedding.clone());
         embedding
-    }
-
-    fn rebuild_after_restore(&mut self) -> Result<(), CheckpointError> {
-        self.id_to_entry.clear();
-
-        if self.entries.is_empty() {
-            self.soft_index = None;
-            if let Some(index) = self.hnsw_index.as_mut() {
-                index.clear();
-            }
-            self.evictions_since_rebuild = 0;
-            return Ok(());
-        }
-
-        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::with_capacity(self.entries.len());
-        let mut expected_dim: Option<usize> = None;
-
-        for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter_mut()) {
-            let embedding = if let Some(existing) = entry.embed.clone() {
-                existing
-            } else {
-                let ums = encode_to_ums(&self.modality_mapper, &entry.tensor);
-                let generated = ums.components().to_vec();
-                entry.embed = Some(generated.clone());
-                generated
-            };
-
-            if let Some(dim) = expected_dim {
-                if embedding.len() != dim {
-                    return Err(CheckpointError::InvalidFormat(format!(
-                        "Inconsistent embedding dimension for entry {entry_id}"
-                    )));
-                }
-            } else {
-                expected_dim = Some(embedding.len());
-            }
-
-            embeddings.push((entry_id, embedding));
-            self.id_to_entry.insert(entry_id, entry.clone());
-        }
-
-        if let Some(dim) = expected_dim {
-            let mut index = SoftIndex::new(dim);
-            for (id, embedding) in embeddings {
-                index.add(id, embedding)?;
-            }
-            index.build();
-            self.soft_index = Some(index);
-        } else {
-            self.soft_index = None;
-        }
-
-        if self.config.use_hnsw {
-            self.rebuild_semantic_index_internal()?;
-        } else {
-            self.hnsw_index = None;
-        }
-
-        if let Some(mb) = self.config.memory_budget_mb {
-            let mut budget = MemoryBudget::new(mb);
-            if self.config.use_hnsw {
-                budget.set_ann_overhead_factor(2.0);
-            }
-            for entry in self.entries.iter() {
-                budget.add_entry(estimate_entry_size(entry));
-            }
-            self.memory_budget = Some(budget);
-        } else {
-            self.memory_budget = None;
-        }
-
-        self.evictions_since_rebuild = 0;
-        Ok(())
     }
 
     fn rebuild_semantic_index_internal(&mut self) -> DreamResult<()> {
@@ -1388,11 +1526,39 @@ impl SimpleDreamPool {
 
 impl Checkpointable for SimpleDreamPool {
     fn save_checkpoint<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), CheckpointError> {
+        let entries: Vec<DreamEntryCheckpoint> = self
+            .entries
+            .iter()
+            .map(DreamEntryCheckpoint::capture)
+            .collect::<Result<_, _>>()?;
+
+        let mut id_map: Vec<(EntryId, usize)> = self
+            .entry_ids
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, entry_id)| (entry_id, idx))
+            .collect();
+        id_map.sort_by_key(|(entry_id, _)| entry_id.as_u128());
+
+        let soft_index = self.soft_index.as_ref().map(|index| index.snapshot());
+        let hnsw_index = if let Some(index) = &self.hnsw_index {
+            Some(index.snapshot()?)
+        } else {
+            None
+        };
+        let memory_budget = self.memory_budget.as_ref().map(|budget| budget.snapshot());
+
         let snapshot = SimpleDreamPoolCheckpoint {
             version: POOL_CHECKPOINT_VERSION,
             config: self.config.clone(),
-            entries: self.entries.iter().cloned().collect(),
+            entries,
             entry_ids: self.entry_ids.iter().copied().collect(),
+            id_map,
+            soft_index,
+            hnsw_index,
+            memory_budget,
+            evictions_since_rebuild: self.evictions_since_rebuild,
         };
 
         Self::write_snapshot(&snapshot, path)
@@ -1413,10 +1579,73 @@ impl Checkpointable for SimpleDreamPool {
             ));
         }
 
-        let mut pool = SimpleDreamPool::new(snapshot.config);
-        pool.entries = VecDeque::from(snapshot.entries);
-        pool.entry_ids = VecDeque::from(snapshot.entry_ids);
-        pool.rebuild_after_restore()?;
+        if snapshot.id_map.len() != snapshot.entry_ids.len() {
+            return Err(CheckpointError::InvalidFormat(
+                "id_map length does not match stored entry IDs".to_string(),
+            ));
+        }
+
+        let SimpleDreamPoolCheckpoint {
+            version: _,
+            config,
+            entries,
+            entry_ids,
+            id_map,
+            soft_index,
+            hnsw_index,
+            memory_budget,
+            evictions_since_rebuild,
+        } = snapshot;
+
+        let mut pool = SimpleDreamPool::new(config);
+        let concrete_entries: Vec<DreamEntry> = entries
+            .into_iter()
+            .map(DreamEntryCheckpoint::into_entry)
+            .collect::<Result<_, _>>()?;
+        pool.entries = VecDeque::from(concrete_entries);
+        pool.entry_ids = VecDeque::from(entry_ids);
+
+        let mut id_to_entry = HashMap::with_capacity(pool.entries.len());
+        for (entry_id, index) in id_map.into_iter() {
+            if index >= pool.entries.len() {
+                return Err(CheckpointError::InvalidFormat(
+                    "id_map index out of range".to_string(),
+                ));
+            }
+            let entry = pool.entries.get(index).cloned().ok_or_else(|| {
+                CheckpointError::InvalidFormat(
+                    "Failed to resolve entry for id_map index".to_string(),
+                )
+            })?;
+            if id_to_entry.insert(entry_id, entry).is_some() {
+                return Err(CheckpointError::InvalidFormat(format!(
+                    "Duplicate entry {entry_id} detected while restoring id_map"
+                )));
+            }
+        }
+
+        let id_set: HashSet<EntryId> = pool.entry_ids.iter().copied().collect();
+        if !id_to_entry.keys().all(|entry_id| id_set.contains(entry_id)) {
+            return Err(CheckpointError::InvalidFormat(
+                "id_map contains entries missing from entry_ids".to_string(),
+            ));
+        }
+
+        pool.id_to_entry = id_to_entry;
+        pool.soft_index = soft_index.map(SoftIndex::from_snapshot);
+        pool.hnsw_index = match hnsw_index {
+            Some(index_snapshot) => Some(HnswIndex::from_snapshot(index_snapshot)?),
+            None => None,
+        };
+        pool.memory_budget = match memory_budget {
+            Some(budget_snapshot) => Some(
+                MemoryBudget::from_snapshot(budget_snapshot)
+                    .map_err(CheckpointError::InvalidFormat)?,
+            ),
+            None => None,
+        };
+        pool.evictions_since_rebuild = evictions_since_rebuild;
+
         Ok(pool)
     }
 }
@@ -1720,5 +1949,62 @@ mod tests {
 
         assert_eq!(high_utility.len(), 5);
         assert!(high_utility.iter().all(|d| d.utility.unwrap_or(0.0) >= 0.5));
+    }
+
+    #[test]
+    fn test_checkpoint_roundtrip_preserves_indices() {
+        use crate::dream::embedding::EmbeddingMapper;
+        use crate::solver::SolverResult;
+        use crate::ChromaticTensor;
+        use serde_json::json;
+        use uuid::Uuid;
+
+        let mut config = PoolConfig::default();
+        config.use_hnsw = true;
+        config.max_size = 16;
+        let mut pool = SimpleDreamPool::new(config.clone());
+
+        let result = SolverResult {
+            energy: 0.1,
+            coherence: 0.95,
+            violation: 0.02,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        };
+
+        for seed in 0..4 {
+            let tensor = ChromaticTensor::from_seed(seed, 8, 8, 2);
+            assert!(pool.add_if_coherent(tensor, result.clone()));
+        }
+
+        let mapper = EmbeddingMapper::new(64);
+        pool.rebuild_soft_index(&mapper, None);
+        assert!(pool.soft_index.is_some());
+        assert!(pool.hnsw_index.as_ref().map(|idx| idx.len()).unwrap_or(0) > 0);
+
+        let checkpoint_path =
+            std::env::temp_dir().join(format!("simple_pool-checkpoint-{}.bin", Uuid::new_v4()));
+
+        pool.save_checkpoint(&checkpoint_path).unwrap();
+        let restored = SimpleDreamPool::load_checkpoint(&checkpoint_path).unwrap();
+        let _ = std::fs::remove_file(&checkpoint_path);
+
+        assert_eq!(restored.len(), pool.len());
+        assert_eq!(
+            restored
+                .hnsw_index
+                .as_ref()
+                .map(|idx| idx.len())
+                .unwrap_or(0),
+            pool.hnsw_index.as_ref().map(|idx| idx.len()).unwrap_or(0)
+        );
+        assert_eq!(
+            restored.evictions_since_rebuild,
+            pool.evictions_since_rebuild
+        );
+        assert_eq!(restored.entry_ids.len(), pool.entry_ids.len());
+        assert_eq!(restored.id_to_entry.len(), pool.id_to_entry.len());
+        assert!(restored.soft_index.is_some());
     }
 }

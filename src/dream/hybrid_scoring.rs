@@ -6,9 +6,9 @@
 //! - γ·class_match (optional class conditioning)
 //! - δ·MMR_penalty (diversity enforcement)
 
+use crate::data::ColorClass;
 use crate::dream::simple_pool::DreamEntry;
 use crate::dream::soft_index::EntryId;
-use crate::data::ColorClass;
 use std::collections::HashMap;
 
 /// Weights for hybrid retrieval scoring
@@ -51,7 +51,13 @@ impl RetrievalWeights {
         assert!(delta >= 0.0 && delta <= 1.0, "delta must be in [0, 1]");
         assert!(lambda >= 0.0 && lambda <= 1.0, "lambda must be in [0, 1]");
 
-        Self { alpha, beta, gamma, delta, lambda }
+        Self {
+            alpha,
+            beta,
+            gamma,
+            delta,
+            lambda,
+        }
     }
 
     /// Normalize weights so alpha + beta + gamma + delta = 1.0
@@ -114,9 +120,8 @@ pub fn rerank_hybrid(
                 };
 
                 // Base score (before diversity penalty)
-                let base_score = weights.alpha * norm_sim
-                    + weights.beta * utility
-                    + weights.gamma * class_match;
+                let base_score =
+                    weights.alpha * norm_sim + weights.beta * utility + weights.gamma * class_match;
 
                 (*id, base_score, norm_sim)
             })
@@ -132,7 +137,10 @@ pub fn rerank_hybrid(
     }
 
     // Return final scores
-    scored.into_iter().map(|(id, score, _)| (id, score)).collect()
+    scored
+        .into_iter()
+        .map(|(id, score, _)| (id, score))
+        .collect()
 }
 
 /// Apply Maximum Marginal Relevance (MMR) penalty for diversity
@@ -169,7 +177,10 @@ fn apply_mmr_penalty(
                 .filter_map(|(sel_id, _, _)| {
                     let entry = entries.get(id)?;
                     let sel_entry = entries.get(sel_id)?;
-                    Some(chroma_similarity(&entry.chroma_signature, &sel_entry.chroma_signature))
+                    Some(chroma_similarity(
+                        &entry.chroma_signature,
+                        &sel_entry.chroma_signature,
+                    ))
                 })
                 .fold(0.0f32, |a, b| a.max(b));
 
@@ -225,10 +236,15 @@ fn min_max(values: &[f32]) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::ChromaticTensor;
     use crate::solver::SolverResult;
+    use crate::tensor::ChromaticTensor;
 
-    fn mock_entry(id: EntryId, chroma: [f32; 3], utility: f32, class: Option<ColorClass>) -> (EntryId, DreamEntry) {
+    fn mock_entry(
+        id: EntryId,
+        chroma: [f32; 3],
+        utility: f32,
+        class: Option<ColorClass>,
+    ) -> (EntryId, DreamEntry) {
         let tensor = ChromaticTensor::new(4, 4, 3);
         let result = SolverResult {
             energy: 0.1,
@@ -253,20 +269,23 @@ mod tests {
         let ums_vector = vec![0.0f32; 512];
         let hue_category = 0usize;
 
-        (id, DreamEntry {
-            tensor,
-            result,
-            chroma_signature: chroma,
-            class_label: class,
-            utility: Some(utility),
-            timestamp: std::time::SystemTime::now(),
-            usage_count: 0,
-            spectral_features,
-            embed: None,
-            util_mean: utility,
-            ums_vector,
-            hue_category,
-        })
+        (
+            id,
+            DreamEntry {
+                tensor,
+                result,
+                chroma_signature: chroma,
+                class_label: class,
+                utility: Some(utility),
+                timestamp: std::time::SystemTime::now(),
+                usage_count: 0,
+                spectral_features,
+                embed: None,
+                util_mean: utility,
+                ums_vector,
+                hue_category,
+            },
+        )
     }
 
     #[test]
@@ -295,9 +314,18 @@ mod tests {
         let id3 = EntryId::new_v4();
 
         let mut entries = HashMap::new();
-        entries.insert(id1, mock_entry(id1, [1.0, 0.0, 0.0], 0.9, Some(ColorClass::Red)).1);
-        entries.insert(id2, mock_entry(id2, [0.0, 1.0, 0.0], 0.5, Some(ColorClass::Green)).1);
-        entries.insert(id3, mock_entry(id3, [0.0, 0.0, 1.0], 0.3, Some(ColorClass::Blue)).1);
+        entries.insert(
+            id1,
+            mock_entry(id1, [1.0, 0.0, 0.0], 0.9, Some(ColorClass::Red)).1,
+        );
+        entries.insert(
+            id2,
+            mock_entry(id2, [0.0, 1.0, 0.0], 0.5, Some(ColorClass::Green)).1,
+        );
+        entries.insert(
+            id3,
+            mock_entry(id3, [0.0, 0.0, 1.0], 0.3, Some(ColorClass::Blue)).1,
+        );
 
         let hits = vec![
             (id1, 0.95), // High similarity
@@ -322,7 +350,7 @@ mod tests {
         entries.insert(id2, mock_entry(id2, [0.9, 0.0, 0.0], 0.9, None).1); // High utility
 
         let hits = vec![
-            (id1, 1.0), // Slightly higher similarity
+            (id1, 1.0),  // Slightly higher similarity
             (id2, 0.95), // Slightly lower similarity
         ];
 
@@ -346,13 +374,16 @@ mod tests {
         let id2 = EntryId::new_v4();
 
         let mut entries = HashMap::new();
-        entries.insert(id1, mock_entry(id1, [1.0, 0.0, 0.0], 0.5, Some(ColorClass::Red)).1);
-        entries.insert(id2, mock_entry(id2, [1.0, 0.0, 0.0], 0.5, Some(ColorClass::Blue)).1);
+        entries.insert(
+            id1,
+            mock_entry(id1, [1.0, 0.0, 0.0], 0.5, Some(ColorClass::Red)).1,
+        );
+        entries.insert(
+            id2,
+            mock_entry(id2, [1.0, 0.0, 0.0], 0.5, Some(ColorClass::Blue)).1,
+        );
 
-        let hits = vec![
-            (id1, 0.9),
-            (id2, 0.9),
-        ];
+        let hits = vec![(id1, 0.9), (id2, 0.9)];
 
         let weights = RetrievalWeights {
             alpha: 0.3,
@@ -401,7 +432,10 @@ mod tests {
         // Check that id3 ranks higher than id2 due to diversity
         let id2_rank = results.iter().position(|(id, _)| *id == id2).unwrap();
         let id3_rank = results.iter().position(|(id, _)| *id == id3).unwrap();
-        assert!(id3_rank < id2_rank, "id3 should rank higher than id2 due to diversity");
+        assert!(
+            id3_rank < id2_rank,
+            "id3 should rank higher than id2 due to diversity"
+        );
     }
 
     #[test]

@@ -301,7 +301,10 @@ impl Checkpointable for ChromaticNetwork {
             version: NETWORK_CHECKPOINT_VERSION,
             layers: self.layers.clone(),
             num_classes: self.num_classes,
-            config: Some(NetworkConfigSnapshot::from_layers(&self.layers, self.num_classes)),
+            config: Some(NetworkConfigSnapshot::from_layers(
+                &self.layers,
+                self.num_classes,
+            )),
             optimizer_state: self.optimizer_state.clone(),
         };
 
@@ -318,10 +321,9 @@ impl Checkpointable for ChromaticNetwork {
             });
         }
 
-        let config = snapshot
-            .config
-            .take()
-            .unwrap_or_else(|| NetworkConfigSnapshot::from_layers(&snapshot.layers, snapshot.num_classes));
+        let config = snapshot.config.take().unwrap_or_else(|| {
+            NetworkConfigSnapshot::from_layers(&snapshot.layers, snapshot.num_classes)
+        });
         config.validate_layers(&snapshot.layers)?;
 
         Ok(Self {

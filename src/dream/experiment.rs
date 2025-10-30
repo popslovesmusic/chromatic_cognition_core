@@ -4,11 +4,11 @@
 //! "Validation Experiment Specification: Retrieval Hypothesis"
 
 use crate::data::{ColorDataset, ColorSample, DatasetConfig};
-use crate::dream::SimpleDreamPool;
 use crate::dream::simple_pool::{PoolConfig, PoolStats};
+use crate::dream::SimpleDreamPool;
 use crate::solver::Solver;
-use crate::tensor::{ChromaticTensor, operations::mix};
-use serde::{Serialize, Deserialize};
+use crate::tensor::{operations::mix, ChromaticTensor};
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 /// Seeding strategy for the experiment
@@ -137,7 +137,10 @@ impl<S: Solver> ExperimentHarness<S> {
             });
         }
 
-        let final_accuracy = epoch_metrics.last().map(|m| m.validation_accuracy).unwrap_or(0.0);
+        let final_accuracy = epoch_metrics
+            .last()
+            .map(|m| m.validation_accuracy)
+            .unwrap_or(0.0);
         let convergence_epoch = self.find_convergence_epoch(&epoch_metrics, final_accuracy);
 
         ExperimentResult {
@@ -173,7 +176,8 @@ impl<S: Solver> ExperimentHarness<S> {
             let mut final_result = None;
 
             for _ in 0..self.config.dream_iterations {
-                let result = self.solver
+                let result = self
+                    .solver
                     .evaluate(&current_tensor, false)
                     .expect("Solver evaluation failed");
 
@@ -273,7 +277,8 @@ impl<S: Solver> ExperimentHarness<S> {
         let mut total_coherence = 0.0;
 
         for sample in val_samples.iter().take(50) {
-            let result = self.solver
+            let result = self
+                .solver
                 .evaluate(&sample.tensor, false)
                 .expect("Validation evaluation failed");
             total_coherence += result.coherence;
@@ -284,7 +289,11 @@ impl<S: Solver> ExperimentHarness<S> {
     }
 
     /// Find the epoch where convergence occurred (90% of final accuracy)
-    fn find_convergence_epoch(&self, epoch_metrics: &[EpochMetrics], final_accuracy: f64) -> Option<usize> {
+    fn find_convergence_epoch(
+        &self,
+        epoch_metrics: &[EpochMetrics],
+        final_accuracy: f64,
+    ) -> Option<usize> {
         let target = final_accuracy * 0.9;
 
         for metrics in epoch_metrics {

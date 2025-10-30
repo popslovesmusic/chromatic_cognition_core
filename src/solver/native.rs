@@ -1,3 +1,4 @@
+use crate::solver::{Solver, SolverResult};
 /// Native Rust implementation of chromatic field solver
 ///
 /// This solver computes color-theory-informed metrics directly without
@@ -8,9 +9,7 @@
 /// - **Violation**: Gamut clipping, extreme saturation, local discontinuities
 ///
 /// All metrics have analytical gradients for efficient training.
-
 use crate::tensor::ChromaticTensor;
-use crate::solver::{Solver, SolverResult};
 use anyhow::Result;
 use serde_json::json;
 
@@ -47,8 +46,18 @@ impl ChromaticNativeSolver {
     }
 
     /// Create a solver with custom parameters
-    pub fn with_params(lambda_tv: f32, lambda_sat: f32, target_saturation: f32, discontinuity_threshold: f32) -> Self {
-        Self { lambda_tv, lambda_sat, target_saturation, discontinuity_threshold }
+    pub fn with_params(
+        lambda_tv: f32,
+        lambda_sat: f32,
+        target_saturation: f32,
+        discontinuity_threshold: f32,
+    ) -> Self {
+        Self {
+            lambda_tv,
+            lambda_sat,
+            target_saturation,
+            discontinuity_threshold,
+        }
     }
 
     /// Compute total variation (spatial smoothness penalty)
@@ -109,11 +118,9 @@ impl ChromaticNativeSolver {
     fn compute_color_harmony(&self, field: &ChromaticTensor) -> f32 {
         // 1. Complementary balance
         let mean_rgb = field.mean_rgb();
-        let complementary_balance = 1.0 - (
-            (mean_rgb[0] - 0.5).abs() +
-            (mean_rgb[1] - 0.5).abs() +
-            (mean_rgb[2] - 0.5).abs()
-        ) / 1.5; // Normalize to [0,1]
+        let complementary_balance = 1.0
+            - ((mean_rgb[0] - 0.5).abs() + (mean_rgb[1] - 0.5).abs() + (mean_rgb[2] - 0.5).abs())
+                / 1.5; // Normalize to [0,1]
 
         // 2. Hue consistency
         let hue_std = self.compute_hue_std_dev(field);
@@ -138,12 +145,14 @@ impl ChromaticNativeSolver {
         }
 
         let mean_hue: f32 = hues.iter().sum::<f32>() / hues.len() as f32;
-        let variance: f32 = hues.iter()
+        let variance: f32 = hues
+            .iter()
             .map(|&h| {
                 let diff = angle_difference(h, mean_hue);
                 diff * diff
             })
-            .sum::<f32>() / hues.len() as f32;
+            .sum::<f32>()
+            / hues.len() as f32;
 
         variance.sqrt()
     }

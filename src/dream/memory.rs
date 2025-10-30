@@ -4,6 +4,8 @@
 //! to prevent unbounded memory growth in large dream pools.
 
 use crate::dream::simple_pool::DreamEntry;
+use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 use std::mem;
 
 /// Memory budget tracker for dream pool
@@ -31,6 +33,16 @@ pub struct MemoryBudget {
     /// Eviction threshold (0.0-1.0), triggers at this fraction of max_bytes
     eviction_threshold: f32,
     /// Additional multiplier applied when ANN indexes mirror entry memory usage (e.g. HNSW ≈ 2×)
+    ann_overhead_factor: f32,
+}
+
+/// Serializable representation of [`MemoryBudget`].
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct MemoryBudgetSnapshot {
+    max_bytes: u64,
+    current_bytes: u64,
+    entry_count: u64,
+    eviction_threshold: f32,
     ann_overhead_factor: f32,
 }
 
@@ -211,6 +223,47 @@ impl MemoryBudget {
         let bytes_to_free = usage - threshold_bytes;
         let count = (bytes_to_free + avg_entry_size - 1) / avg_entry_size;
         count.min(self.entry_count)
+    }
+
+    /// Capture the full budget state for checkpointing.
+    pub(crate) fn snapshot(&self) -> MemoryBudgetSnapshot {
+        MemoryBudgetSnapshot {
+            max_bytes: u64::try_from(self.max_bytes).unwrap_or(u64::MAX),
+            current_bytes: u64::try_from(self.current_bytes).unwrap_or(u64::MAX),
+            entry_count: u64::try_from(self.entry_count).unwrap_or(u64::MAX),
+            eviction_threshold: self.eviction_threshold,
+            ann_overhead_factor: self.ann_overhead_factor,
+        }
+    }
+
+    /// Restore a budget instance from a previously captured snapshot.
+    pub(crate) fn from_snapshot(snapshot: MemoryBudgetSnapshot) -> Result<Self, String> {
+        let max_bytes = usize::try_from(snapshot.max_bytes)
+            .map_err(|_| "Memory budget max_bytes exceeds platform capacity".to_string())?;
+        let current_bytes = usize::try_from(snapshot.current_bytes)
+            .map_err(|_| "Memory budget current_bytes exceeds platform capacity".to_string())?;
+        let entry_count = usize::try_from(snapshot.entry_count)
+            .map_err(|_| "Memory budget entry_count exceeds platform capacity".to_string())?;
+
+        if !(0.0..=1.0).contains(&snapshot.eviction_threshold) {
+            return Err("Memory budget eviction_threshold out of range".to_string());
+        }
+
+        if !(1.0..=8.0).contains(&snapshot.ann_overhead_factor) {
+            return Err("Memory budget ann_overhead_factor out of range".to_string());
+        }
+
+        if current_bytes > max_bytes {
+            return Err("Memory budget current_bytes exceeds max_bytes".to_string());
+        }
+
+        Ok(Self {
+            max_bytes,
+            current_bytes,
+            entry_count,
+            eviction_threshold: snapshot.eviction_threshold,
+            ann_overhead_factor: snapshot.ann_overhead_factor,
+        })
     }
 
     /// Get average entry size in bytes

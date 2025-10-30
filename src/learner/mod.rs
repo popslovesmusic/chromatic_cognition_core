@@ -15,6 +15,6 @@ pub mod classifier;
 pub mod feedback;
 pub mod training;
 
-pub use classifier::{ColorClassifier, MLPClassifier, ClassifierConfig};
-pub use feedback::{FeedbackRecord, UtilityAggregator, ClassUtilityStats};
-pub use training::{TrainingConfig, TrainingResult, train_with_dreams};
+pub use classifier::{ClassifierConfig, ColorClassifier, MLPClassifier};
+pub use feedback::{ClassUtilityStats, FeedbackRecord, UtilityAggregator};
+pub use training::{train_with_dreams, TrainingConfig, TrainingResult};

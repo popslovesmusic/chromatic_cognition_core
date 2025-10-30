@@ -1,5 +1,5 @@
-use chromatic_cognition_core::{mix, ChromaticTensor, SimpleDreamPool, SolverResult};
 use chromatic_cognition_core::dream::simple_pool::{DreamEntry, PoolConfig};
+use chromatic_cognition_core::{mix, ChromaticTensor, SimpleDreamPool, SolverResult};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -91,7 +91,12 @@ fn execute_harness(seed: u64) -> HarnessRun {
             control_pool.add_if_coherent(control_seed.clone(), control_result.clone());
         }
 
-        let control_record = EpochRecord::new(epoch, Group::Control, control_result.energy, control_result.coherence);
+        let control_record = EpochRecord::new(
+            epoch,
+            Group::Control,
+            control_result.energy,
+            control_result.coherence,
+        );
         csv_rows.push(control_record.to_csv_row());
         json_records.push(control_record.clone());
         final_control = Some(control_record);
@@ -112,7 +117,12 @@ fn execute_harness(seed: u64) -> HarnessRun {
             test_pool.add_if_coherent(test_seed.clone(), test_result.clone());
         }
 
-        let test_record = EpochRecord::new(epoch, Group::Test, test_result.energy, test_result.coherence);
+        let test_record = EpochRecord::new(
+            epoch,
+            Group::Test,
+            test_result.energy,
+            test_result.coherence,
+        );
         csv_rows.push(test_record.to_csv_row());
         json_records.push(test_record.clone());
         final_test = Some(test_record);
@@ -131,7 +141,11 @@ fn execute_harness(seed: u64) -> HarnessRun {
     }
 }
 
-fn blend_with_alpha(base: &ChromaticTensor, retrieved: &ChromaticTensor, alpha: f32) -> ChromaticTensor {
+fn blend_with_alpha(
+    base: &ChromaticTensor,
+    retrieved: &ChromaticTensor,
+    alpha: f32,
+) -> ChromaticTensor {
     assert_eq!(base.colors.dim(), retrieved.colors.dim());
     assert_eq!(base.certainty.dim(), retrieved.certainty.dim());
 
@@ -149,7 +163,8 @@ fn blend_with_alpha(base: &ChromaticTensor, retrieved: &ChromaticTensor, alpha: 
                 for channel in 0..channels {
                     let base_val = base.colors[[row, col, layer, channel]];
                     let retrieved_val = retrieved.colors[[row, col, layer, channel]];
-                    colors[[row, col, layer, channel]] = base_val * (1.0 - alpha) + retrieved_val * alpha;
+                    colors[[row, col, layer, channel]] =
+                        base_val * (1.0 - alpha) + retrieved_val * alpha;
                 }
                 let base_cert = base.certainty[[row, col, layer]];
                 let retrieved_cert = retrieved.certainty[[row, col, layer]];
@@ -222,14 +237,18 @@ fn validation_harness_retrieval_outperforms_control() {
 
     let csv_records = parse_csv_records(&first_run.csv);
     assert_eq!(csv_records.len(), NUM_EPOCHS * 2);
-    assert_eq!(csv_records.first().map(|r| r.group.as_str()), Some("Control"));
+    assert_eq!(
+        csv_records.first().map(|r| r.group.as_str()),
+        Some("Control")
+    );
     let csv_last = csv_records.last().expect("csv should contain final row");
     assert_eq!(csv_last.epoch, first_run.final_test.epoch);
     assert_eq!(csv_last.group, first_run.final_test.group);
     assert!((csv_last.avg_loss - first_run.final_test.avg_loss).abs() < 1e-5);
     assert!((csv_last.avg_coherence - first_run.final_test.avg_coherence).abs() < 1e-5);
 
-    let json_records: Vec<EpochRecord> = serde_json::from_str(&first_run.json).expect("json parsing succeeds");
+    let json_records: Vec<EpochRecord> =
+        serde_json::from_str(&first_run.json).expect("json parsing succeeds");
     assert_eq!(json_records.len(), NUM_EPOCHS * 2);
     let json_last = json_records.last().expect("json should contain final row");
     assert_eq!(json_last.epoch, first_run.final_test.epoch);

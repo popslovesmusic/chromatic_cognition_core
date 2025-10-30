@@ -16,10 +16,12 @@ use chromatic_cognition_core::data::{ColorClass, ColorDataset, ColorSample, Data
 use chromatic_cognition_core::dream::simple_pool::PoolConfig;
 use chromatic_cognition_core::dream::{BiasProfile, RetrievalMode, SimpleDreamPool};
 use chromatic_cognition_core::learner::feedback::{FeedbackRecord, UtilityAggregator};
-use chromatic_cognition_core::learner::training::{EpochMetrics, TrainingConfig, TrainingResult, train_with_dreams};
+use chromatic_cognition_core::learner::training::{
+    train_with_dreams, EpochMetrics, TrainingConfig, TrainingResult,
+};
 use chromatic_cognition_core::learner::{ClassifierConfig, MLPClassifier};
-use chromatic_cognition_core::tensor::operations::mix;
 use chromatic_cognition_core::solver::native::ChromaticNativeSolver;
+use chromatic_cognition_core::tensor::operations::mix;
 use chromatic_cognition_core::Solver;
 
 fn main() {
@@ -98,9 +100,18 @@ fn main() {
     );
 
     println!("\nBaseline Results:");
-    println!("  Final Train Accuracy: {:.2}%", result_baseline.final_train_accuracy * 100.0);
-    println!("  Final Val Accuracy: {:.2}%", result_baseline.final_val_accuracy * 100.0);
-    println!("  Converged at Epoch: {:?}", result_baseline.converged_epoch);
+    println!(
+        "  Final Train Accuracy: {:.2}%",
+        result_baseline.final_train_accuracy * 100.0
+    );
+    println!(
+        "  Final Val Accuracy: {:.2}%",
+        result_baseline.final_val_accuracy * 100.0
+    );
+    println!(
+        "  Converged at Epoch: {:?}",
+        result_baseline.converged_epoch
+    );
     println!("  Total Time: {}ms\n", result_baseline.total_elapsed_ms);
 
     // ========================================================================
@@ -138,8 +149,14 @@ fn main() {
     );
 
     println!("\nPhase 3A Results:");
-    println!("  Final Train Accuracy: {:.2}%", result_3a.final_train_accuracy * 100.0);
-    println!("  Final Val Accuracy: {:.2}%", result_3a.final_val_accuracy * 100.0);
+    println!(
+        "  Final Train Accuracy: {:.2}%",
+        result_3a.final_train_accuracy * 100.0
+    );
+    println!(
+        "  Final Val Accuracy: {:.2}%",
+        result_3a.final_val_accuracy * 100.0
+    );
     println!("  Converged at Epoch: {:?}", result_3a.converged_epoch);
     println!("  Total Time: {}ms\n", result_3a.total_elapsed_ms);
 
@@ -183,8 +200,14 @@ fn main() {
     );
 
     println!("\nPhase 3B Results:");
-    println!("  Final Train Accuracy: {:.2}%", result_3b.final_train_accuracy * 100.0);
-    println!("  Final Val Accuracy: {:.2}%", result_3b.final_val_accuracy * 100.0);
+    println!(
+        "  Final Train Accuracy: {:.2}%",
+        result_3b.final_train_accuracy * 100.0
+    );
+    println!(
+        "  Final Val Accuracy: {:.2}%",
+        result_3b.final_val_accuracy * 100.0
+    );
     println!("  Converged at Epoch: {:?}", result_3b.converged_epoch);
     println!("  Total Time: {}ms", result_3b.total_elapsed_ms);
     println!("  Feedback Records: {}", aggregator.len());
@@ -204,10 +227,7 @@ fn main() {
         if let Some(stats) = aggregator.class_stats(class) {
             println!(
                 "  {:?}: mean_utility={:.3}, helpful={}, harmful={}",
-                class,
-                stats.mean_utility,
-                stats.helpful_count,
-                stats.harmful_count
+                class, stats.mean_utility, stats.helpful_count, stats.harmful_count
             );
         }
     }
@@ -254,9 +274,15 @@ fn main() {
     );
 
     let epochs = [
-        result_baseline.converged_epoch.unwrap_or(base_training.num_epochs),
-        result_3a.converged_epoch.unwrap_or(base_training.num_epochs),
-        result_3b.converged_epoch.unwrap_or(base_training.num_epochs),
+        result_baseline
+            .converged_epoch
+            .unwrap_or(base_training.num_epochs),
+        result_3a
+            .converged_epoch
+            .unwrap_or(base_training.num_epochs),
+        result_3b
+            .converged_epoch
+            .unwrap_or(base_training.num_epochs),
     ];
     let best_epoch_idx = epochs
         .iter()
@@ -328,7 +354,11 @@ fn train_with_phase_3b(
             for sample in batch {
                 let mut tensor = sample.tensor.clone();
                 let signature = tensor.mean_rgb();
-                let retrieved = pool.retrieve_similar_class(&signature, sample.label, config.num_dreams_retrieve);
+                let retrieved = pool.retrieve_similar_class(
+                    &signature,
+                    sample.label,
+                    config.num_dreams_retrieve,
+                );
 
                 if let Some(entry) = retrieved.first() {
                     tensor = mix(&tensor, &entry.tensor);
@@ -449,9 +479,5 @@ fn batch_subset<'a>(samples: &'a [ColorSample], epoch: usize) -> Vec<&'a ColorSa
 
     let step = (samples.len() / 16).max(1);
     let offset = epoch % step;
-    samples
-        .iter()
-        .skip(offset)
-        .step_by(step)
-        .collect()
+    samples.iter().skip(offset).step_by(step).collect()
 }

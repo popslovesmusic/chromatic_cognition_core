@@ -2,15 +2,15 @@
 //!
 //! Run with: cargo bench --bench dream_benchmarks
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use chromatic_cognition_core::dream::*;
-use chromatic_cognition_core::dream::soft_index::{SoftIndex, EntryId, Similarity};
-use chromatic_cognition_core::dream::hnsw_index::HnswIndex;
 use chromatic_cognition_core::dream::diversity::{retrieve_diverse_mmr, retrieve_diverse_mmr_fast};
-use chromatic_cognition_core::dream::query_cache::QueryCache;
 use chromatic_cognition_core::dream::embedding::QuerySignature;
+use chromatic_cognition_core::dream::hnsw_index::HnswIndex;
+use chromatic_cognition_core::dream::query_cache::QueryCache;
+use chromatic_cognition_core::dream::soft_index::{EntryId, Similarity, SoftIndex};
+use chromatic_cognition_core::dream::*;
 use chromatic_cognition_core::solver::SolverResult;
 use chromatic_cognition_core::tensor::ChromaticTensor;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use serde_json::json;
 
 /// Benchmark query cache hit rates
@@ -68,26 +68,18 @@ fn bench_hnsw_vs_linear(c: &mut Criterion) {
         let query: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
 
         // Benchmark linear search
-        group.bench_with_input(
-            BenchmarkId::new("linear", size),
-            size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(soft_index.query(&query, 10, Similarity::Cosine).unwrap());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("linear", size), size, |b, _| {
+            b.iter(|| {
+                black_box(soft_index.query(&query, 10, Similarity::Cosine).unwrap());
+            });
+        });
 
         // Benchmark HNSW search
-        group.bench_with_input(
-            BenchmarkId::new("hnsw", size),
-            size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(hnsw.search(&query, 10, Similarity::Cosine).unwrap());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hnsw", size), size, |b, _| {
+            b.iter(|| {
+                black_box(hnsw.search(&query, 10, Similarity::Cosine).unwrap());
+            });
+        });
     }
 
     group.finish();
@@ -111,37 +103,32 @@ fn bench_mmr_diversity(c: &mut Criterion) {
                 meta: json!({}),
             };
             let mut entry = DreamEntry::new(tensor, result);
-            entry.chroma_signature = [
-                (i as f32) / 100.0,
-                1.0 - (i as f32) / 100.0,
-                0.0
-            ];
+            entry.chroma_signature = [(i as f32) / 100.0, 1.0 - (i as f32) / 100.0, 0.0];
             candidates.push(entry);
         }
 
         let query = [1.0, 0.0, 0.0];
 
         // Benchmark standard MMR
-        group.bench_with_input(
-            BenchmarkId::new("standard", k),
-            k,
-            |b, k| {
-                b.iter(|| {
-                    black_box(retrieve_diverse_mmr(&candidates, &query, *k, 0.5, 0.0));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("standard", k), k, |b, k| {
+            b.iter(|| {
+                black_box(retrieve_diverse_mmr(&candidates, &query, *k, 0.5, 0.0));
+            });
+        });
 
         // Benchmark fast MMR with sampling
-        group.bench_with_input(
-            BenchmarkId::new("fast", k),
-            k,
-            |b, k| {
-                b.iter(|| {
-                    black_box(retrieve_diverse_mmr_fast(&candidates, &query, *k, 0.5, 0.0, 5));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("fast", k), k, |b, k| {
+            b.iter(|| {
+                black_box(retrieve_diverse_mmr_fast(
+                    &candidates,
+                    &query,
+                    *k,
+                    0.5,
+                    0.0,
+                    5,
+                ));
+            });
+        });
     }
 
     group.finish();

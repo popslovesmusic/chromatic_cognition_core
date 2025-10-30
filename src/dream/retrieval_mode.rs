@@ -2,7 +2,7 @@
 //!
 //! Defines how the dream pool retrieval should operate during training.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Retrieval mode for dream pool queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

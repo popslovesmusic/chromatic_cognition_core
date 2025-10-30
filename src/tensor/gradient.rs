@@ -1,7 +1,7 @@
 use std::io;
 use std::path::Path;
 
-use ndarray::{Array3, s};
+use ndarray::{s, Array3};
 use plotters::prelude::*;
 use rayon::prelude::*;
 

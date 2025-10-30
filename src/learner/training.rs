@@ -7,9 +7,9 @@ use crate::data::ColorSample;
 use crate::dream::{RetrievalMode, SimpleDreamPool};
 use crate::learner::classifier::{ColorClassifier, MLPClassifier};
 use crate::solver::Solver;
-use crate::tensor::ChromaticTensor;
 use crate::tensor::operations::mix;
-use serde::{Serialize, Deserialize};
+use crate::tensor::ChromaticTensor;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 /// Training configuration
@@ -73,10 +73,7 @@ pub struct TrainingResult {
 }
 
 /// Compute accuracy on a dataset
-fn compute_accuracy<C: ColorClassifier>(
-    classifier: &C,
-    samples: &[ColorSample],
-) -> f32 {
+fn compute_accuracy<C: ColorClassifier>(classifier: &C, samples: &[ColorSample]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
@@ -225,7 +222,10 @@ pub fn train_with_dreams<S: Solver>(
         current_lr *= config.lr_decay;
     }
 
-    let final_train_accuracy = epoch_metrics.last().map(|m| m.train_accuracy).unwrap_or(0.0);
+    let final_train_accuracy = epoch_metrics
+        .last()
+        .map(|m| m.train_accuracy)
+        .unwrap_or(0.0);
     let final_val_accuracy = epoch_metrics.last().map(|m| m.val_accuracy).unwrap_or(0.0);
 
     TrainingResult {
@@ -249,12 +249,7 @@ pub fn train_baseline(
     config.use_dream_pool = false;
 
     train_with_dreams::<crate::ChromaticNativeSolver>(
-        classifier,
-        train_data,
-        val_data,
-        config,
-        None,
-        None,
+        classifier, train_data, val_data, config, None, None,
     )
 }
 

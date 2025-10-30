@@ -16,10 +16,16 @@
 //! Outside of those regimes the linear scan provides simpler, deterministic
 //! behaviour with lower memory overhead.
 
+use crate::checkpoint::CheckpointError;
 use crate::dream::error::{DreamError, DreamResult};
 use crate::dream::soft_index::{EntryId, Similarity};
+use hnsw_rs::hnswio::{HnswIo, ReloadOptions};
 use hnsw_rs::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// HNSW-based approximate nearest neighbor index
@@ -68,7 +74,94 @@ pub struct HnswIndex<'a> {
     ef_search: usize,
 }
 
+/// Serialized representation of an ANN graph dump (graph + data).
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct HnswGraphSnapshot {
+    graph: Vec<u8>,
+    data: Vec<u8>,
+}
+
+/// Serializable snapshot capturing the full state of an [`HnswIndex`].
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct HnswIndexSnapshot {
+    dim: usize,
+    max_connections: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    id_map: Vec<(EntryId, u32)>,
+    id_slots: Vec<Option<EntryId>>,
+    embeddings: Vec<Option<Vec<f32>>>,
+    ghost_metrics: Vec<(u32, u8)>,
+    cosine: Option<HnswGraphSnapshot>,
+    euclidean: Option<HnswGraphSnapshot>,
+}
+
+struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl TempDirGuard {
+    fn new(prefix: &str) -> Result<Self, CheckpointError> {
+        let base = env::temp_dir();
+        let path = base.join(format!("{prefix}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 impl<'a> HnswIndex<'a> {
+    /// Capture the full state of the index, including ANN graphs, for checkpointing.
+    pub(crate) fn snapshot(&self) -> Result<HnswIndexSnapshot, CheckpointError> {
+        let mut id_map: Vec<(EntryId, u32)> = self
+            .id_map
+            .iter()
+            .map(|(uuid, internal)| (*uuid, *internal))
+            .collect();
+        id_map.sort_by_key(|(uuid, _)| uuid.as_u128());
+
+        let mut ghost_metrics: Vec<(u32, u8)> = self
+            .ghost_metrics
+            .iter()
+            .map(|(id, mask)| (*id, *mask))
+            .collect();
+        ghost_metrics.sort_by_key(|(id, _)| *id);
+
+        let cosine = if let Some(index) = &self.hnsw_cosine {
+            Some(dump_hnsw_graph(index)?)
+        } else {
+            None
+        };
+
+        let euclidean = if let Some(index) = &self.hnsw_euclidean {
+            Some(dump_hnsw_graph(index)?)
+        } else {
+            None
+        };
+
+        Ok(HnswIndexSnapshot {
+            dim: self.dim,
+            max_connections: self.max_connections,
+            ef_construction: self.ef_construction,
+            ef_search: self.ef_search,
+            id_map,
+            id_slots: self.id_slots.clone(),
+            embeddings: self.embeddings.clone(),
+            ghost_metrics,
+            cosine,
+            euclidean,
+        })
+    }
+
     const GHOST_COSINE: u8 = 0b01;
     const GHOST_EUCLIDEAN: u8 = 0b10;
 
@@ -492,6 +585,93 @@ impl<'a> HnswIndex<'a> {
     pub(crate) fn ghost_count_for_mode_test(&self, mode: Similarity) -> usize {
         self.ghost_count_for_mode(mode)
     }
+}
+
+impl HnswIndex<'static> {
+    /// Reconstruct an index from a serialized snapshot.
+    pub(crate) fn from_snapshot(snapshot: HnswIndexSnapshot) -> Result<Self, CheckpointError> {
+        if snapshot.id_slots.len() != snapshot.embeddings.len() {
+            return Err(CheckpointError::InvalidFormat(
+                "HNSW snapshot slot and embedding counts differ".to_string(),
+            ));
+        }
+
+        let mut id_map = HashMap::with_capacity(snapshot.id_map.len());
+        for (entry_id, internal_id) in snapshot.id_map {
+            if id_map.insert(entry_id, internal_id).is_some() {
+                return Err(CheckpointError::InvalidFormat(format!(
+                    "Duplicate entry {entry_id} in HNSW snapshot"
+                )));
+            }
+        }
+
+        let ghost_metrics = snapshot.ghost_metrics.into_iter().collect();
+
+        let mut index = HnswIndex {
+            hnsw_cosine: None,
+            hnsw_euclidean: None,
+            id_map,
+            id_slots: snapshot.id_slots,
+            embeddings: snapshot.embeddings,
+            ghost_metrics,
+            dim: snapshot.dim,
+            max_connections: snapshot.max_connections,
+            ef_construction: snapshot.ef_construction,
+            ef_search: snapshot.ef_search,
+        };
+
+        if let Some(cosine_snapshot) = snapshot.cosine {
+            index.hnsw_cosine = Some(load_hnsw_graph::<DistCosine>(&cosine_snapshot)?);
+        }
+
+        if let Some(euclidean_snapshot) = snapshot.euclidean {
+            index.hnsw_euclidean = Some(load_hnsw_graph::<DistL2>(&euclidean_snapshot)?);
+        }
+
+        Ok(index)
+    }
+}
+
+fn dump_hnsw_graph<D>(index: &Hnsw<f32, D>) -> Result<HnswGraphSnapshot, CheckpointError>
+where
+    D: Distance<f32> + Send + Sync,
+{
+    let guard = TempDirGuard::new("csa-hnsw-dump")?;
+    let basename = format!("snapshot-{}", Uuid::new_v4());
+    index.file_dump(guard.path(), &basename).map_err(|err| {
+        CheckpointError::InvalidFormat(format!("Failed to dump HNSW graph: {err}"))
+    })?;
+
+    let graph_path = guard.path().join(format!("{basename}.hnsw.graph"));
+    let data_path = guard.path().join(format!("{basename}.hnsw.data"));
+
+    let graph = fs::read(&graph_path)?;
+    let data = fs::read(&data_path)?;
+
+    Ok(HnswGraphSnapshot { graph, data })
+}
+
+fn load_hnsw_graph<D>(
+    snapshot: &HnswGraphSnapshot,
+) -> Result<Hnsw<'static, f32, D>, CheckpointError>
+where
+    D: Distance<f32> + Default + Send + Sync + 'static,
+{
+    let guard = TempDirGuard::new("csa-hnsw-load")?;
+    let basename = format!("snapshot-{}", Uuid::new_v4());
+    let graph_path = guard.path().join(format!("{basename}.hnsw.graph"));
+    let data_path = guard.path().join(format!("{basename}.hnsw.data"));
+
+    fs::write(&graph_path, &snapshot.graph)?;
+    fs::write(&data_path, &snapshot.data)?;
+
+    let mut reloader = HnswIo::new(guard.path(), &basename);
+    reloader.set_options(ReloadOptions::new(false));
+    let hnsw = reloader.load_hnsw::<f32, D>().map_err(|err| {
+        CheckpointError::InvalidFormat(format!("Failed to reload HNSW graph: {err}"))
+    })?;
+
+    Ok(unsafe { std::mem::transmute::<Hnsw<'_, f32, D>, Hnsw<'static, f32, D>>(hnsw) })
 }
 
 /// Statistics for HNSW index

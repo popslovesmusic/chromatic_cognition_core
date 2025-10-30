@@ -268,14 +268,10 @@ mod tests {
         let mapper = create_test_mapper();
 
         // First query
-        let embed1 = cache.get_or_compute(&[0.856, 0.234, 0.112], |q| {
-            encode_rgb(&mapper, q)
-        });
+        let embed1 = cache.get_or_compute(&[0.856, 0.234, 0.112], |q| encode_rgb(&mapper, q));
 
         // Second query with minor floating-point variation (within 0.001)
-        let embed2 = cache.get_or_compute(&[0.8564, 0.2336, 0.1124], |q| {
-            encode_rgb(&mapper, q)
-        });
+        let embed2 = cache.get_or_compute(&[0.8564, 0.2336, 0.1124], |q| encode_rgb(&mapper, q));
 
         // Should be cache hit (same after rounding)
         assert_eq!(cache.hits(), 1);

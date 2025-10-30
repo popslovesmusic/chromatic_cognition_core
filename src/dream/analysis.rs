@@ -3,8 +3,8 @@
 //! Provides tools for analyzing and comparing A/B test results,
 //! including statistical significance testing.
 
-use crate::dream::experiment::{ExperimentResult, EpochMetrics};
-use serde::{Serialize, Deserialize};
+use crate::dream::experiment::{EpochMetrics, ExperimentResult};
+use serde::{Deserialize, Serialize};
 
 /// Comparison of two experiment results
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,14 +98,22 @@ pub fn compare_experiments(
         .iter()
         .map(|m| m.mean_coherence)
         .collect();
-    let test_coherence: Vec<f64> = test.epoch_metrics.iter().map(|m| m.mean_coherence).collect();
+    let test_coherence: Vec<f64> = test
+        .epoch_metrics
+        .iter()
+        .map(|m| m.mean_coherence)
+        .collect();
 
     let mean_coherence_control = Statistics::from_slice(&control_coherence).mean;
     let mean_coherence_test = Statistics::from_slice(&test_coherence).mean;
     let mean_coherence_improvement = mean_coherence_test - mean_coherence_control;
 
     // Mean energy comparison (lower is better)
-    let control_energy: Vec<f64> = control.epoch_metrics.iter().map(|m| m.mean_energy).collect();
+    let control_energy: Vec<f64> = control
+        .epoch_metrics
+        .iter()
+        .map(|m| m.mean_energy)
+        .collect();
     let test_energy: Vec<f64> = test.epoch_metrics.iter().map(|m| m.mean_energy).collect();
 
     let mean_energy_control = Statistics::from_slice(&control_energy).mean;
@@ -113,7 +121,8 @@ pub fn compare_experiments(
     let mean_energy_improvement = mean_energy_control - mean_energy_test; // Note: reversed (lower is better)
 
     // Simple significance test: improvement must be > threshold and positive
-    let is_significant = accuracy_improvement > significance_threshold && accuracy_improvement > 0.0;
+    let is_significant =
+        accuracy_improvement > significance_threshold && accuracy_improvement > 0.0;
 
     ExperimentComparison {
         control_strategy: control.strategy.clone(),
@@ -145,11 +154,7 @@ pub fn welch_t_test(sample1: &[f64], sample2: &[f64]) -> (f64, f64) {
     let se2 = stats2.variance / stats2.count as f64;
     let se = (se1 + se2).sqrt();
 
-    let t_stat = if se > 0.0 {
-        mean_diff / se
-    } else {
-        0.0
-    };
+    let t_stat = if se > 0.0 { mean_diff / se } else { 0.0 };
 
     // Welch-Satterthwaite degrees of freedom
     let df = if se1 > 0.0 && se2 > 0.0 {
@@ -227,7 +232,9 @@ pub fn generate_report(comparison: &ExperimentComparison) -> String {
         report.push_str("✅ The test strategy shows statistically significant improvement.\n");
         report.push_str("   Recommendation: PROCEED with Dream Pool implementation.\n");
     } else if comparison.accuracy_improvement > 0.0 {
-        report.push_str("⚠️  The test strategy shows improvement, but below significance threshold.\n");
+        report.push_str(
+            "⚠️  The test strategy shows improvement, but below significance threshold.\n",
+        );
         report.push_str("   Recommendation: INVESTIGATE further or tune parameters.\n");
     } else {
         report.push_str("❌ The test strategy does not show improvement.\n");
@@ -246,10 +253,7 @@ pub fn analyze_learning_curves(
         .iter()
         .map(|m| m.validation_accuracy)
         .collect();
-    let test_accuracies: Vec<f64> = test_metrics
-        .iter()
-        .map(|m| m.validation_accuracy)
-        .collect();
+    let test_accuracies: Vec<f64> = test_metrics.iter().map(|m| m.validation_accuracy).collect();
 
     let control_stats = Statistics::from_slice(&control_accuracies);
     let test_stats = Statistics::from_slice(&test_accuracies);

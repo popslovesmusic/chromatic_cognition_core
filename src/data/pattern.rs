@@ -57,8 +57,7 @@ pub fn generate_primary_color_dataset(
 
     for class in 0..3 {
         for sample_idx in 0..samples_per_class {
-            let sample_seed = seed
-                .wrapping_add((class * samples_per_class + sample_idx) as u64);
+            let sample_seed = seed.wrapping_add((class * samples_per_class + sample_idx) as u64);
 
             // Start with random tensor
             let mut tensor = ChromaticTensor::from_seed(sample_seed, rows, cols, layers);
@@ -93,9 +92,12 @@ pub fn generate_primary_color_dataset(
             for row in 0..rows {
                 for col in 0..cols {
                     for layer in 0..layers {
-                        tensor.colors[[row, col, layer, 0]] += (rng.gen::<f32>() - 0.5) * noise_level;
-                        tensor.colors[[row, col, layer, 1]] += (rng.gen::<f32>() - 0.5) * noise_level;
-                        tensor.colors[[row, col, layer, 2]] += (rng.gen::<f32>() - 0.5) * noise_level;
+                        tensor.colors[[row, col, layer, 0]] +=
+                            (rng.gen::<f32>() - 0.5) * noise_level;
+                        tensor.colors[[row, col, layer, 1]] +=
+                            (rng.gen::<f32>() - 0.5) * noise_level;
+                        tensor.colors[[row, col, layer, 2]] +=
+                            (rng.gen::<f32>() - 0.5) * noise_level;
                     }
                 }
             }
@@ -196,6 +198,6 @@ mod tests {
         let (train, val) = split_dataset(dataset, 0.8);
 
         assert_eq!(train.len(), 24); // 0.8 * 30
-        assert_eq!(val.len(), 6);    // 0.2 * 30
+        assert_eq!(val.len(), 6); // 0.2 * 30
     }
 }

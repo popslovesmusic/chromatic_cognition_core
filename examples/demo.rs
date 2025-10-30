@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use chromatic_cognition_core::config::ConfigError;
 use chromatic_cognition_core::logging;
 use chromatic_cognition_core::{
-    ChromaticTensor, EngineConfig, GradientLayer, complement, filter, mix, mse_loss, saturate,
+    complement, filter, mix, mse_loss, saturate, ChromaticTensor, EngineConfig, GradientLayer,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

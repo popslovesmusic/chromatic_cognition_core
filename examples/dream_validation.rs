@@ -13,8 +13,10 @@
 //! ```
 
 use chromatic_cognition_core::data::DatasetConfig;
+use chromatic_cognition_core::dream::experiment::{
+    ExperimentConfig, ExperimentHarness, SeedingStrategy,
+};
 use chromatic_cognition_core::dream::simple_pool::PoolConfig;
-use chromatic_cognition_core::dream::experiment::{ExperimentConfig, ExperimentHarness, SeedingStrategy};
 use chromatic_cognition_core::ChromaticNativeSolver;
 use std::fs::File;
 use std::io::Write;
@@ -94,7 +96,10 @@ fn main() {
     let accuracy_improvement = result_b.final_accuracy - result_a.final_accuracy;
     let improvement_pct = (accuracy_improvement / result_a.final_accuracy) * 100.0;
 
-    println!("Accuracy Improvement: {:.4} ({:.2}%)", accuracy_improvement, improvement_pct);
+    println!(
+        "Accuracy Improvement: {:.4} ({:.2}%)",
+        accuracy_improvement, improvement_pct
+    );
 
     if let (Some(conv_a), Some(conv_b)) = (result_a.convergence_epoch, result_b.convergence_epoch) {
         let epoch_reduction = conv_a as i32 - conv_b as i32;
@@ -102,13 +107,24 @@ fn main() {
         println!("Group B Convergence: epoch {}", conv_b);
         println!("Epochs Saved: {}\n", epoch_reduction);
     } else {
-        println!("Convergence: A={:?}, B={:?}\n", result_a.convergence_epoch, result_b.convergence_epoch);
+        println!(
+            "Convergence: A={:?}, B={:?}\n",
+            result_a.convergence_epoch, result_b.convergence_epoch
+        );
     }
 
     // Compare mean coherence across epochs
-    let mean_coherence_a: f64 = result_a.epoch_metrics.iter().map(|m| m.mean_coherence).sum::<f64>()
+    let mean_coherence_a: f64 = result_a
+        .epoch_metrics
+        .iter()
+        .map(|m| m.mean_coherence)
+        .sum::<f64>()
         / result_a.epoch_metrics.len() as f64;
-    let mean_coherence_b: f64 = result_b.epoch_metrics.iter().map(|m| m.mean_coherence).sum::<f64>()
+    let mean_coherence_b: f64 = result_b
+        .epoch_metrics
+        .iter()
+        .map(|m| m.mean_coherence)
+        .sum::<f64>()
         / result_b.epoch_metrics.len() as f64;
 
     println!("Mean Coherence (all epochs):");
@@ -122,11 +138,15 @@ fn main() {
 
     let json_a = serde_json::to_string_pretty(&result_a).expect("Failed to serialize Group A");
     let mut file_a = File::create("logs/experiment_group_a.json").expect("Failed to create file");
-    file_a.write_all(json_a.as_bytes()).expect("Failed to write");
+    file_a
+        .write_all(json_a.as_bytes())
+        .expect("Failed to write");
 
     let json_b = serde_json::to_string_pretty(&result_b).expect("Failed to serialize Group B");
     let mut file_b = File::create("logs/experiment_group_b.json").expect("Failed to create file");
-    file_b.write_all(json_b.as_bytes()).expect("Failed to write");
+    file_b
+        .write_all(json_b.as_bytes())
+        .expect("Failed to write");
 
     println!("Results saved!");
     println!("\n=== Experiment Complete ===");

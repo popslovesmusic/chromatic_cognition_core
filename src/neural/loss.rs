@@ -56,9 +56,18 @@ pub fn cross_entropy_loss(
     assert!(num_classes <= 3, "Currently only supports up to 3 classes");
 
     // Softmax
-    let max_logit = logits[..num_classes].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let exp_sum: f32 = logits[..num_classes].iter().map(|&x| (x - max_logit).exp()).sum();
-    let probs: Vec<f32> = logits[..num_classes].iter().map(|&x| (x - max_logit).exp() / exp_sum).collect();
+    let max_logit = logits[..num_classes]
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let exp_sum: f32 = logits[..num_classes]
+        .iter()
+        .map(|&x| (x - max_logit).exp())
+        .sum();
+    let probs: Vec<f32> = logits[..num_classes]
+        .iter()
+        .map(|&x| (x - max_logit).exp() / exp_sum)
+        .collect();
 
     // Cross-entropy loss
     let loss = -probs[label].ln();
@@ -79,7 +88,12 @@ pub fn cross_entropy_loss(
     let n = (rows * cols * layers) as f32;
 
     let mut gradient = predicted.clone();
-    for val in gradient.colors.as_slice_mut().expect("contiguous").chunks_exact_mut(3) {
+    for val in gradient
+        .colors
+        .as_slice_mut()
+        .expect("contiguous")
+        .chunks_exact_mut(3)
+    {
         val[0] = grad_logits[0] / n;
         val[1] = grad_logits[1] / n;
         val[2] = grad_logits[2] / n;
@@ -152,7 +166,12 @@ mod tests {
         let mut tensor = ChromaticTensor::from_seed(42, 4, 4, 2);
 
         // Manually set colors to favor class 0 (red)
-        for val in tensor.colors.as_slice_mut().expect("contiguous").chunks_exact_mut(3) {
+        for val in tensor
+            .colors
+            .as_slice_mut()
+            .expect("contiguous")
+            .chunks_exact_mut(3)
+        {
             val[0] = 1.0; // Red
             val[1] = 0.0; // Green
             val[2] = 0.0; // Blue

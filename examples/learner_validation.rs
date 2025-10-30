@@ -17,8 +17,8 @@ use chromatic_cognition_core::data::{ColorDataset, DatasetConfig};
 use chromatic_cognition_core::dream::simple_pool::PoolConfig;
 use chromatic_cognition_core::dream::{RetrievalMode, SimpleDreamPool};
 use chromatic_cognition_core::{
-    ChromaticNativeSolver, ClassifierConfig, MLPClassifier, TrainingConfig,
-    train_baseline, train_with_dreams,
+    train_baseline, train_with_dreams, ChromaticNativeSolver, ClassifierConfig, MLPClassifier,
+    TrainingConfig,
 };
 use std::fs::File;
 use std::io::Write;
@@ -88,18 +88,23 @@ fn main() {
     print!("Training baseline model... ");
     std::io::stdout().flush().unwrap();
 
-    let result_baseline = train_baseline(
-        classifier_baseline,
-        &train_data,
-        &val_data,
-        baseline_config,
-    );
+    let result_baseline =
+        train_baseline(classifier_baseline, &train_data, &val_data, baseline_config);
 
     println!("Done!");
     println!("\nBaseline Results:");
-    println!("  Final Train Accuracy: {:.2}%", result_baseline.final_train_accuracy * 100.0);
-    println!("  Final Val Accuracy: {:.2}%", result_baseline.final_val_accuracy * 100.0);
-    println!("  Converged at Epoch: {:?}", result_baseline.converged_epoch);
+    println!(
+        "  Final Train Accuracy: {:.2}%",
+        result_baseline.final_train_accuracy * 100.0
+    );
+    println!(
+        "  Final Val Accuracy: {:.2}%",
+        result_baseline.final_val_accuracy * 100.0
+    );
+    println!(
+        "  Converged at Epoch: {:?}",
+        result_baseline.converged_epoch
+    );
     println!("  Total Time: {}ms\n", result_baseline.total_elapsed_ms);
 
     // ========================================================================
@@ -138,8 +143,14 @@ fn main() {
 
     println!("Done!");
     println!("\nDream Pool Results:");
-    println!("  Final Train Accuracy: {:.2}%", result_dream.final_train_accuracy * 100.0);
-    println!("  Final Val Accuracy: {:.2}%", result_dream.final_val_accuracy * 100.0);
+    println!(
+        "  Final Train Accuracy: {:.2}%",
+        result_dream.final_train_accuracy * 100.0
+    );
+    println!(
+        "  Final Val Accuracy: {:.2}%",
+        result_dream.final_val_accuracy * 100.0
+    );
     println!("  Converged at Epoch: {:?}", result_dream.converged_epoch);
     println!("  Total Time: {}ms", result_dream.total_elapsed_ms);
 
@@ -158,19 +169,37 @@ fn main() {
     let improvement_pct = (accuracy_improvement / result_baseline.final_val_accuracy) * 100.0;
 
     println!("Final Validation Accuracy:");
-    println!("  Baseline: {:.2}%", result_baseline.final_val_accuracy * 100.0);
-    println!("  Dream Pool: {:.2}%", result_dream.final_val_accuracy * 100.0);
-    println!("  Improvement: {:.4} ({:.2}%)\n", accuracy_improvement, improvement_pct);
+    println!(
+        "  Baseline: {:.2}%",
+        result_baseline.final_val_accuracy * 100.0
+    );
+    println!(
+        "  Dream Pool: {:.2}%",
+        result_dream.final_val_accuracy * 100.0
+    );
+    println!(
+        "  Improvement: {:.4} ({:.2}%)\n",
+        accuracy_improvement, improvement_pct
+    );
 
-    let convergence_comparison = match (result_baseline.converged_epoch, result_dream.converged_epoch) {
+    let convergence_comparison = match (
+        result_baseline.converged_epoch,
+        result_dream.converged_epoch,
+    ) {
         (Some(baseline_epoch), Some(dream_epoch)) => {
             println!("Convergence (95% accuracy):");
             println!("  Baseline: epoch {}", baseline_epoch);
             println!("  Dream Pool: epoch {}", dream_epoch);
             if dream_epoch < baseline_epoch {
-                println!("  Dream Pool converged {} epochs FASTER ✓\n", baseline_epoch - dream_epoch);
+                println!(
+                    "  Dream Pool converged {} epochs FASTER ✓\n",
+                    baseline_epoch - dream_epoch
+                );
             } else if dream_epoch > baseline_epoch {
-                println!("  Dream Pool converged {} epochs SLOWER ⚠️\n", dream_epoch - baseline_epoch);
+                println!(
+                    "  Dream Pool converged {} epochs SLOWER ⚠️\n",
+                    dream_epoch - baseline_epoch
+                );
             } else {
                 println!("  Same convergence speed\n");
             }
@@ -205,23 +234,31 @@ fn main() {
     std::fs::create_dir_all("logs").expect("Failed to create logs directory");
 
     // Save JSON results
-    let json_baseline = serde_json::to_string_pretty(&result_baseline)
-        .expect("Failed to serialize baseline");
-    let mut file_baseline = File::create("logs/learner_baseline.json")
-        .expect("Failed to create file");
-    file_baseline.write_all(json_baseline.as_bytes()).expect("Failed to write");
+    let json_baseline =
+        serde_json::to_string_pretty(&result_baseline).expect("Failed to serialize baseline");
+    let mut file_baseline =
+        File::create("logs/learner_baseline.json").expect("Failed to create file");
+    file_baseline
+        .write_all(json_baseline.as_bytes())
+        .expect("Failed to write");
     println!("✓ Baseline results: logs/learner_baseline.json");
 
-    let json_dream = serde_json::to_string_pretty(&result_dream)
-        .expect("Failed to serialize dream pool");
-    let mut file_dream = File::create("logs/learner_dream_pool.json")
-        .expect("Failed to create file");
-    file_dream.write_all(json_dream.as_bytes()).expect("Failed to write");
+    let json_dream =
+        serde_json::to_string_pretty(&result_dream).expect("Failed to serialize dream pool");
+    let mut file_dream =
+        File::create("logs/learner_dream_pool.json").expect("Failed to create file");
+    file_dream
+        .write_all(json_dream.as_bytes())
+        .expect("Failed to write");
     println!("✓ Dream Pool results: logs/learner_dream_pool.json");
 
     // Generate CSV for plotting
     let mut csv = String::from("epoch,baseline_train_acc,baseline_val_acc,dream_train_acc,dream_val_acc,baseline_loss,dream_loss\n");
-    for (baseline, dream) in result_baseline.epoch_metrics.iter().zip(result_dream.epoch_metrics.iter()) {
+    for (baseline, dream) in result_baseline
+        .epoch_metrics
+        .iter()
+        .zip(result_dream.epoch_metrics.iter())
+    {
         csv.push_str(&format!(
             "{},{},{},{},{},{},{}\n",
             baseline.epoch,
@@ -234,9 +271,11 @@ fn main() {
         ));
     }
 
-    let mut csv_file = File::create("logs/learner_comparison.csv")
-        .expect("Failed to create CSV file");
-    csv_file.write_all(csv.as_bytes()).expect("Failed to write CSV");
+    let mut csv_file =
+        File::create("logs/learner_comparison.csv").expect("Failed to create CSV file");
+    csv_file
+        .write_all(csv.as_bytes())
+        .expect("Failed to write CSV");
     println!("✓ Metrics CSV: logs/learner_comparison.csv");
 
     // ========================================================================
@@ -261,7 +300,10 @@ fn main() {
         print!("✗");
     }
     println!("] Training achieves >90% accuracy");
-    println!("      Baseline: {:.2}%", result_baseline.final_val_accuracy * 100.0);
+    println!(
+        "      Baseline: {:.2}%",
+        result_baseline.final_val_accuracy * 100.0
+    );
 
     print!("  [");
     if retrieval_helps {
@@ -280,7 +322,10 @@ fn main() {
     }
     println!("] Dream Pool accelerates convergence");
     if let Some((baseline, dream)) = convergence_comparison {
-        println!("      Baseline: {} epochs, Dream Pool: {} epochs", baseline, dream);
+        println!(
+            "      Baseline: {} epochs, Dream Pool: {} epochs",
+            baseline, dream
+        );
     }
 
     println!("\n╔══════════════════════════════════════════════════════════════╗");

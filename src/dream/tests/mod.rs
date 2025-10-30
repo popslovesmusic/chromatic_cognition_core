@@ -3,9 +3,9 @@
 //! This module contains comprehensive integration tests that verify
 //! the entire dream pool pipeline works correctly end-to-end.
 
-use crate::dream::*;
 use crate::dream::embedding::QuerySignature;
 use crate::dream::soft_index::EntryId;
+use crate::dream::*;
 use crate::solver::SolverResult;
 use crate::tensor::ChromaticTensor;
 use serde_json::json;
@@ -127,7 +127,10 @@ fn test_mmr_diversity_enforcement() {
     assert_eq!(with_diversity.len(), 3);
 
     // First entry should be the same (most relevant)
-    assert_eq!(no_diversity[0].chroma_signature, with_diversity[0].chroma_signature);
+    assert_eq!(
+        no_diversity[0].chroma_signature,
+        with_diversity[0].chroma_signature
+    );
 }
 
 /// Test memory budget prevents unbounded growth
@@ -154,16 +157,14 @@ fn test_memory_budget_prevents_unbounded_growth() {
 fn test_hnsw_scalability() {
     // Test that we can handle large pools with HNSW
     // For now, test with SoftIndex which is simpler for integration tests
-    use crate::dream::soft_index::{SoftIndex, EntryId, Similarity};
+    use crate::dream::soft_index::{EntryId, Similarity, SoftIndex};
 
     let mut index = SoftIndex::new(32);
 
     // Add 1000 entries
     for i in 0..1000 {
         let id = EntryId::new_v4();
-        let embedding: Vec<f32> = (0..32)
-            .map(|j| ((i * 32 + j) as f32) / 32000.0)
-            .collect();
+        let embedding: Vec<f32> = (0..32).map(|j| ((i * 32 + j) as f32) / 32000.0).collect();
         index.add(id, embedding).unwrap();
     }
 
@@ -209,111 +210,129 @@ fn test_error_recovery_on_index_failure() {
     assert!(results.len() <= 5);
 }
 
-    fn build_hnsw_pool(entry_count: usize) -> SimpleDreamPool {
-        let config = PoolConfig {
-            max_size: entry_count + 100,
-            coherence_threshold: 0.0,
-            retrieval_limit: 16,
-            use_hnsw: true,
-            memory_budget_mb: None,
+fn build_hnsw_pool(entry_count: usize) -> SimpleDreamPool {
+    let config = PoolConfig {
+        max_size: entry_count + 100,
+        coherence_threshold: 0.0,
+        retrieval_limit: 16,
+        use_hnsw: true,
+        memory_budget_mb: None,
+    };
+
+    let mut pool = SimpleDreamPool::new(config);
+
+    for seed in 0..entry_count {
+        let tensor = ChromaticTensor::from_seed(seed as u64 + 1, 8, 8, 3);
+        let result = SolverResult {
+            energy: 0.05,
+            coherence: 0.9,
+            violation: 0.01,
+            grad: None,
+            mask: None,
+            meta: json!({ "seed": seed }),
         };
-
-        let mut pool = SimpleDreamPool::new(config);
-
-        for seed in 0..entry_count {
-            let tensor = ChromaticTensor::from_seed(seed as u64 + 1, 8, 8, 3);
-            let result = SolverResult {
-                energy: 0.05,
-                coherence: 0.9,
-                violation: 0.01,
-                grad: None,
-                mask: None,
-                meta: json!({ "seed": seed }),
-            };
-            pool.add(tensor, result);
-        }
-
-        let mapper = EmbeddingMapper::new(64);
-        pool.rebuild_soft_index(&mapper, None);
-
-        assert!(pool.hnsw_built_for_test(), "HNSW index should be constructed for tests");
-        assert_eq!(
-            pool.evictions_since_rebuild_for_test(),
-            0,
-            "Eviction counter should reset after rebuild",
-        );
-
-        assert_eq!(
-            pool.hnsw_ghosts_for_test()
-                .expect("HNSW index must be available after rebuild"),
-            0,
-            "Freshly rebuilt index should not contain ghost nodes",
-        );
-
-        pool
+        pool.add(tensor, result);
     }
 
-    #[test]
-    fn test_index_survives_light_eviction() {
-        let mut pool = build_hnsw_pool(500);
+    let mapper = EmbeddingMapper::new(64);
+    pool.rebuild_soft_index(&mapper, None);
 
-        pool.evict_for_test(5);
+    assert!(
+        pool.hnsw_built_for_test(),
+        "HNSW index should be constructed for tests"
+    );
+    assert_eq!(
+        pool.evictions_since_rebuild_for_test(),
+        0,
+        "Eviction counter should reset after rebuild",
+    );
 
-        assert_eq!(pool.len(), 495, "Pool should remove only the requested entries");
-        assert!(
-            pool.has_soft_index_for_test(),
-            "Linear index should remain after light churn",
-        );
-        assert_eq!(
-            pool.evictions_since_rebuild_for_test(),
-            5,
-            "Eviction counter should reflect light churn",
-        );
+    assert_eq!(
+        pool.hnsw_ghosts_for_test()
+            .expect("HNSW index must be available after rebuild"),
+        0,
+        "Freshly rebuilt index should not contain ghost nodes",
+    );
 
-        assert!(pool.hnsw_built_for_test(), "HNSW graph should remain available");
-        assert_eq!(
-            pool.hnsw_len_for_test().expect("HNSW index should persist"),
-            495,
-            "HNSW id map should match pool size",
-        );
-        assert_eq!(
-            pool.hnsw_ghosts_for_test()
-                .expect("HNSW index should persist after light churn"),
-            5,
-            "Light churn should leave ghost nodes without forcing rebuild",
-        );
-    }
+    pool
+}
 
-    #[test]
-    fn test_index_invalidates_after_heavy_churn() {
-        let mut pool = build_hnsw_pool(500);
+#[test]
+fn test_index_survives_light_eviction() {
+    let mut pool = build_hnsw_pool(500);
 
-        pool.evict_for_test(60);
+    pool.evict_for_test(5);
 
-        assert_eq!(pool.len(), 440, "Pool should evict requested number of entries");
-        assert!(
-            !pool.has_soft_index_for_test(),
-            "Heavy churn should drop the linear index",
-        );
-        assert_eq!(
-            pool.evictions_since_rebuild_for_test(),
-            0,
-            "Eviction counter resets after rebuild",
-        );
+    assert_eq!(
+        pool.len(),
+        495,
+        "Pool should remove only the requested entries"
+    );
+    assert!(
+        pool.has_soft_index_for_test(),
+        "Linear index should remain after light churn",
+    );
+    assert_eq!(
+        pool.evictions_since_rebuild_for_test(),
+        5,
+        "Eviction counter should reflect light churn",
+    );
 
-        assert!(pool.hnsw_built_for_test(), "Rebuilt HNSW graph should be marked as available");
-        assert_eq!(
-            pool.hnsw_len_for_test().expect("HNSW index should be present"),
-            440,
-            "Rebuilt graph should only contain active entries",
-        );
-        assert_eq!(
-            pool.hnsw_ghosts_for_test()
-                .expect("HNSW index should be present after rebuild"),
-            0,
-            "Rebuild should clear ghost nodes introduced by heavy churn",
-        );
-    }
+    assert!(
+        pool.hnsw_built_for_test(),
+        "HNSW graph should remain available"
+    );
+    assert_eq!(
+        pool.hnsw_len_for_test().expect("HNSW index should persist"),
+        495,
+        "HNSW id map should match pool size",
+    );
+    assert_eq!(
+        pool.hnsw_ghosts_for_test()
+            .expect("HNSW index should persist after light churn"),
+        5,
+        "Light churn should leave ghost nodes without forcing rebuild",
+    );
+}
+
+#[test]
+fn test_index_invalidates_after_heavy_churn() {
+    let mut pool = build_hnsw_pool(500);
+
+    pool.evict_for_test(60);
+
+    assert_eq!(
+        pool.len(),
+        440,
+        "Pool should evict requested number of entries"
+    );
+    assert!(
+        !pool.has_soft_index_for_test(),
+        "Heavy churn should drop the linear index",
+    );
+    assert_eq!(
+        pool.evictions_since_rebuild_for_test(),
+        0,
+        "Eviction counter resets after rebuild",
+    );
+
+    assert!(
+        pool.hnsw_built_for_test(),
+        "Rebuilt HNSW graph should be marked as available"
+    );
+    assert_eq!(
+        pool.hnsw_len_for_test()
+            .expect("HNSW index should be present"),
+        440,
+        "Rebuilt graph should only contain active entries",
+    );
+    assert_eq!(
+        pool.hnsw_ghosts_for_test()
+            .expect("HNSW index should be present after rebuild"),
+        0,
+        "Rebuild should clear ghost nodes introduced by heavy churn",
+    );
+}
 
 /// Test concurrent access patterns (basic safety check)
 #[test]
@@ -352,11 +371,8 @@ fn test_concurrent_reads() {
         let mapper_clone = Arc::clone(&mapper);
 
         let handle = thread::spawn(move || {
-            let query = QuerySignature::from_chroma([
-                (i as f32) / 4.0,
-                1.0 - (i as f32) / 4.0,
-                0.0
-            ]);
+            let query =
+                QuerySignature::from_chroma([(i as f32) / 4.0, 1.0 - (i as f32) / 4.0, 0.0]);
             let weights = RetrievalWeights::default();
             let results = pool_clone.retrieve_soft(
                 &query,
@@ -364,7 +380,7 @@ fn test_concurrent_reads() {
                 &weights,
                 Similarity::Cosine,
                 &*mapper_clone,
-                None
+                None,
             );
             results.len()
         });
@@ -416,7 +432,7 @@ fn test_large_batch_operations() {
 /// Test hybrid scoring weights combination
 #[test]
 fn test_hybrid_scoring_weights() {
-    use crate::dream::hybrid_scoring::{RetrievalWeights, rerank_hybrid};
+    use crate::dream::hybrid_scoring::{rerank_hybrid, RetrievalWeights};
     use std::collections::HashMap;
 
     // Create test hits
@@ -453,11 +469,11 @@ fn test_hybrid_scoring_weights() {
 
     // Test different weight configurations
     let equal_weights = RetrievalWeights {
-        alpha: 0.4,    // Similarity
-        beta: 0.3,     // Utility
-        gamma: 0.2,    // Class match
-        delta: 0.1,    // Duplicate penalty
-        lambda: 0.5,   // MMR diversity
+        alpha: 0.4,  // Similarity
+        beta: 0.3,   // Utility
+        gamma: 0.2,  // Class match
+        delta: 0.1,  // Duplicate penalty
+        lambda: 0.5, // MMR diversity
     };
 
     let results = rerank_hybrid(&hits, &equal_weights, &entries, None);
@@ -476,10 +492,10 @@ fn test_hybrid_scoring_weights() {
 /// specified tolerance using perceptual color difference (ΔE94).
 #[test]
 fn test_ums_round_trip_fidelity() {
-    use crate::bridge::{encode_to_ums, decode_from_ums, ModalityMapper};
+    use crate::bridge::{decode_from_ums, encode_to_ums, ModalityMapper};
     use crate::config::BridgeConfig;
-    use crate::spectral::color::delta_e94;
     use crate::spectral::canonical_hue;
+    use crate::spectral::color::delta_e94;
 
     // Helper to convert HSL to RGB (inline version)
     fn hsl_to_rgb(h_norm: f32, saturation: f32, luminance: f32) -> [f32; 3] {
@@ -498,7 +514,11 @@ fn test_ums_round_trip_fidelity() {
         };
 
         let m = luminance - c / 2.0;
-        [(r1 + m).clamp(0.0, 1.0), (g1 + m).clamp(0.0, 1.0), (b1 + m).clamp(0.0, 1.0)]
+        [
+            (r1 + m).clamp(0.0, 1.0),
+            (g1 + m).clamp(0.0, 1.0),
+            (b1 + m).clamp(0.0, 1.0),
+        ]
     }
 
     // Load bridge configuration
@@ -514,7 +534,11 @@ fn test_ums_round_trip_fidelity() {
 
         // Encode to UMS
         let ums_vector = encode_to_ums(&mapper, &tensor);
-        assert_eq!(ums_vector.components().len(), 512, "UMS vector must be 512D");
+        assert_eq!(
+            ums_vector.components().len(),
+            512,
+            "UMS vector must be 512D"
+        );
 
         // Decode from UMS (returns HSL: [hue_radians, saturation, luminance])
         let decoded_hsl = decode_from_ums(&ums_vector);
@@ -590,8 +614,14 @@ fn test_dream_entry_ums_integration() {
     let entry2 = DreamEntry::new(tensor.clone(), result2);
 
     // Same tensor should produce same UMS vector and hue category
-    assert_eq!(entry.ums_vector, entry2.ums_vector, "UMS encoding must be deterministic");
-    assert_eq!(entry.hue_category, entry2.hue_category, "Hue category must be deterministic");
+    assert_eq!(
+        entry.ums_vector, entry2.ums_vector,
+        "UMS encoding must be deterministic"
+    );
+    assert_eq!(
+        entry.hue_category, entry2.hue_category,
+        "Hue category must be deterministic"
+    );
 }
 
 /// Test category-based hybrid retrieval (Phase 3)
@@ -639,14 +669,17 @@ fn test_retrieve_hybrid_category_filtering() {
 
     // All results should be from the same category as the query
     if !results.is_empty() {
-        let query_entry = DreamEntry::new(query_tensor.clone(), SolverResult {
-            energy: 0.1,
-            coherence: 0.9,
-            violation: 0.0,
-            grad: None,
-            mask: None,
-            meta: json!({}),
-        });
+        let query_entry = DreamEntry::new(
+            query_tensor.clone(),
+            SolverResult {
+                energy: 0.1,
+                coherence: 0.9,
+                violation: 0.0,
+                grad: None,
+                mask: None,
+                meta: json!({}),
+            },
+        );
         let query_category = query_entry.hue_category;
 
         for result in &results {
@@ -681,24 +714,34 @@ fn test_retrieve_by_category() {
 
     // Create a query UMS vector (use an actual entry's UMS for testing)
     let query_tensor = ChromaticTensor::from_seed(42, 8, 8, 2);
-    let query_entry = DreamEntry::new(query_tensor, SolverResult {
-        energy: 0.1,
-        coherence: 0.9,
-        violation: 0.0,
-        grad: None,
-        mask: None,
-        meta: json!({}),
-    });
+    let query_entry = DreamEntry::new(
+        query_tensor,
+        SolverResult {
+            energy: 0.1,
+            coherence: 0.9,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({}),
+        },
+    );
 
     // Test retrieve_by_category for category 0
     let results = pool.retrieve_by_category(0, &query_entry.ums_vector, 3);
 
     // Verify all results are from category 0
     for result in &results {
-        assert_eq!(result.hue_category, 0, "All results should be from category 0");
+        assert_eq!(
+            result.hue_category, 0,
+            "All results should be from category 0"
+        );
     }
 
     // Test invalid category (should return empty with warning)
     let results = pool.retrieve_by_category(12, &query_entry.ums_vector, 3);
-    assert_eq!(results.len(), 0, "Invalid category should return empty results");
+    assert_eq!(
+        results.len(),
+        0,
+        "Invalid category should return empty results"
+    );
 }
