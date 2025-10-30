@@ -40,8 +40,13 @@ pub struct HnswIndex<'a> {
     id_map: HashMap<Uuid, u32>,
     /// Mapping from internal numeric identifier back to EntryId
     id_slots: Vec<Option<EntryId>>,
-    /// Pending embeddings waiting to be inserted during build()
-    pending_embeddings: Vec<Vec<f32>>,
+    /// Stored embeddings indexed by internal identifier. Entries set to None have
+    /// been evicted and are skipped during rebuilds.
+    embeddings: Vec<Option<Vec<f32>>>,
+    /// Tracks which internal nodes are still present in one or more active HNSW
+    /// graphs despite having been logically removed from the pool. The u8 bitmask
+    /// encodes which similarity modes (cosine/euclidean) still contain the node.
+    ghost_metrics: HashMap<u32, u8>,
     /// Embedding dimension
     dim: usize,
     /// Maximum number of connections per node
@@ -53,6 +58,50 @@ pub struct HnswIndex<'a> {
 }
 
 impl<'a> HnswIndex<'a> {
+    const GHOST_COSINE: u8 = 0b01;
+    const GHOST_EUCLIDEAN: u8 = 0b10;
+
+    fn mode_mask(mode: Similarity) -> u8 {
+        match mode {
+            Similarity::Cosine => Self::GHOST_COSINE,
+            Similarity::Euclidean => Self::GHOST_EUCLIDEAN,
+        }
+    }
+
+    fn clear_ghost_mask(&mut self, mask: u8) {
+        self.ghost_metrics.retain(|_, value| {
+            *value &= !mask;
+            *value != 0
+        });
+    }
+
+    fn ghost_count_for_mode(&self, mode: Similarity) -> usize {
+        let mask = Self::mode_mask(mode);
+        self.ghost_metrics
+            .values()
+            .filter(|value| (**value & mask) != 0)
+            .count()
+    }
+
+    fn mark_ghost(&mut self, internal_id: u32) {
+        let mut mask = 0u8;
+        if self.hnsw_cosine.is_some() {
+            mask |= Self::GHOST_COSINE;
+        }
+        if self.hnsw_euclidean.is_some() {
+            mask |= Self::GHOST_EUCLIDEAN;
+        }
+
+        if mask == 0 {
+            self.ghost_metrics.remove(&internal_id);
+        } else {
+            self.ghost_metrics
+                .entry(internal_id)
+                .and_modify(|entry| *entry |= mask)
+                .or_insert(mask);
+        }
+    }
+
     /// Create a new HNSW index
     ///
     /// # Arguments
@@ -69,7 +118,8 @@ impl<'a> HnswIndex<'a> {
             hnsw_euclidean: None,
             id_map: HashMap::with_capacity(capacity),
             id_slots: Vec::with_capacity(capacity),
-            pending_embeddings: Vec::with_capacity(capacity),
+            embeddings: Vec::with_capacity(capacity),
+            ghost_metrics: HashMap::new(),
             dim,
             max_connections: 16,
             ef_construction: 200,
@@ -98,7 +148,8 @@ impl<'a> HnswIndex<'a> {
             hnsw_euclidean: None,
             id_map: HashMap::with_capacity(capacity),
             id_slots: Vec::with_capacity(capacity),
-            pending_embeddings: Vec::with_capacity(capacity),
+            embeddings: Vec::with_capacity(capacity),
+            ghost_metrics: HashMap::new(),
             dim,
             max_connections,
             ef_construction,
@@ -125,75 +176,91 @@ impl<'a> HnswIndex<'a> {
             ));
         }
 
-        let internal_id = self.id_slots.len() as u32;
+        let internal_id = self.embeddings.len() as u32;
         self.id_map.insert(id, internal_id);
         self.id_slots.push(Some(id));
-        self.pending_embeddings.push(embedding);
+
+        // Store embedding for future rebuilds and immediate insertions.
+        self.embeddings.push(Some(embedding));
+        let stored = self
+            .embeddings
+            .last()
+            .and_then(|maybe| maybe.as_ref())
+            .expect("embedding just pushed must exist");
+
+        if let Some(index) = self.hnsw_cosine.as_ref() {
+            index.insert((stored.as_slice(), internal_id as usize));
+        }
+
+        if let Some(index) = self.hnsw_euclidean.as_ref() {
+            index.insert((stored.as_slice(), internal_id as usize));
+        }
 
         Ok(())
     }
 
-    /// Build the HNSW index from accumulated entries
+    /// Build or rebuild the HNSW index for a specific similarity mode.
     ///
-    /// Must be called after adding all entries and before searching.
-    /// This is when the actual HNSW graph is constructed.
+    /// Uses the stored embedding cache to reconstruct the ANN graph while
+    /// leaving other similarity modes intact. Incremental insertions performed
+    /// via [`add`] remain part of the rebuilt structure.
     ///
-    /// # Note
-    ///
-    /// This implementation uses a simplified approach where we rebuild
-    /// the entire index. A production implementation would support
-    /// incremental updates.
     pub fn build(&mut self, mode: Similarity) -> DreamResult<()> {
-        if self.id_slots.len() != self.pending_embeddings.len() {
+        if self.id_slots.len() != self.embeddings.len() {
             return Err(DreamError::index_corrupted(
                 "HNSW build: id_map and pending embeddings length mismatch",
             ));
         }
 
-        let num_entries = self.pending_embeddings.len();
-
-        // Reset previous indexes before rebuilding
-        self.hnsw_cosine = None;
-        self.hnsw_euclidean = None;
-
+        let num_entries = self.embeddings.len();
+        let capacity = num_entries.max(1);
         match mode {
             Similarity::Cosine => {
                 let hnsw = Hnsw::<f32, DistCosine>::new(
                     self.max_connections,
-                    num_entries,
+                    capacity,
                     self.ef_construction,
                     self.ef_construction,
                     DistCosine,
                 );
 
-                // Insert all embeddings
-                for (idx, embedding) in self.pending_embeddings.iter().enumerate() {
+                for (idx, embedding) in self
+                    .embeddings
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, maybe)| maybe.as_ref().map(|emb| (idx, emb)))
+                {
                     hnsw.insert((embedding.as_slice(), idx));
                 }
 
                 self.hnsw_cosine = Some(hnsw);
+                self.clear_ghost_mask(Self::GHOST_COSINE);
             }
             Similarity::Euclidean => {
                 let hnsw = Hnsw::<f32, DistL2>::new(
                     self.max_connections,
-                    num_entries,
+                    capacity,
                     self.ef_construction,
                     self.ef_construction,
                     DistL2,
                 );
 
-                // Insert all embeddings
-                for (idx, embedding) in self.pending_embeddings.iter().enumerate() {
+                for (idx, embedding) in self
+                    .embeddings
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, maybe)| maybe.as_ref().map(|emb| (idx, emb)))
+                {
                     hnsw.insert((embedding.as_slice(), idx));
                 }
 
                 self.hnsw_euclidean = Some(hnsw);
+                self.clear_ghost_mask(Self::GHOST_EUCLIDEAN);
             }
         }
 
-        // Truncate slots to actual number of entries in case build() is called after clear()
+        // Ensure slot vector length matches stored embeddings
         self.id_slots.truncate(num_entries);
-        self.pending_embeddings.clear();
 
         Ok(())
     }
@@ -229,6 +296,14 @@ impl<'a> HnswIndex<'a> {
             ));
         }
 
+        let ghost_budget = self.ghost_count_for_mode(mode);
+        let total_nodes = self.embeddings.len();
+        let raw_k = if total_nodes == 0 {
+            k
+        } else {
+            (k + ghost_budget).clamp(k, total_nodes)
+        };
+
         let results = match mode {
             Similarity::Cosine => {
                 let hnsw = self
@@ -236,7 +311,7 @@ impl<'a> HnswIndex<'a> {
                     .as_ref()
                     .ok_or_else(|| DreamError::index_not_built("HNSW search (cosine)"))?;
 
-                hnsw.search(query, k, self.ef_search)
+                hnsw.search(query, raw_k.max(1), self.ef_search)
             }
             Similarity::Euclidean => {
                 let hnsw = self
@@ -244,15 +319,17 @@ impl<'a> HnswIndex<'a> {
                     .as_ref()
                     .ok_or_else(|| DreamError::index_not_built("HNSW search (euclidean)"))?;
 
-                hnsw.search(query, k, self.ef_search)
+                hnsw.search(query, raw_k.max(1), self.ef_search)
             }
         };
 
         // Convert internal IDs to EntryIds and distances to similarity scores
-        let mut mapped = Vec::with_capacity(results.len());
+        let mut mapped = Vec::with_capacity(k.min(results.len()));
+        let mask = Self::mode_mask(mode);
 
         for neighbor in results {
-            let internal_id = neighbor.d_id;
+            let internal_idx = neighbor.d_id;
+            let internal_id = internal_idx as u32;
             let distance = neighbor.distance;
 
             if !distance.is_finite() {
@@ -261,17 +338,16 @@ impl<'a> HnswIndex<'a> {
                 ));
             }
 
-            let entry_id = self
-                .id_slots
-                .get(internal_id)
-                .copied()
-                .flatten()
-                .ok_or_else(|| {
-                    DreamError::index_corrupted(format!(
-                        "HNSW search: missing id_map entry for internal id {}",
-                        internal_id
-                    ))
-                })?;
+            if let Some(flags) = self.ghost_metrics.get(&internal_id) {
+                if flags & mask != 0 {
+                    continue;
+                }
+            }
+
+            let entry_id = match self.id_slots.get(internal_idx).copied().flatten() {
+                Some(id) => id,
+                None => continue,
+            };
 
             // Convert distance to similarity score, clamping to deterministic ranges
             let similarity = match mode {
@@ -283,6 +359,10 @@ impl<'a> HnswIndex<'a> {
             };
 
             mapped.push((entry_id, similarity));
+
+            if mapped.len() == k {
+                break;
+            }
         }
 
         Ok(mapped)
@@ -304,7 +384,25 @@ impl<'a> HnswIndex<'a> {
         self.hnsw_euclidean = None;
         self.id_map.clear();
         self.id_slots.clear();
-        self.pending_embeddings.clear();
+        self.embeddings.clear();
+        self.ghost_metrics.clear();
+    }
+
+    /// Rebuild all active ANN graphs to purge ghost nodes and re-balance links
+    /// without discarding stored embeddings.
+    pub fn rebuild_active(&mut self) -> DreamResult<()> {
+        let rebuild_cosine = self.hnsw_cosine.is_some();
+        let rebuild_euclidean = self.hnsw_euclidean.is_some();
+
+        if rebuild_cosine {
+            self.build(Similarity::Cosine)?;
+        }
+
+        if rebuild_euclidean {
+            self.build(Similarity::Euclidean)?;
+        }
+
+        Ok(())
     }
 
     /// Get embedding dimension
@@ -333,9 +431,16 @@ impl<'a> HnswIndex<'a> {
     /// Clear a slot in the internal identifier table. This marks the
     /// corresponding internal node as logically removed.
     pub fn clear_internal_slot(&mut self, internal_id: u32) {
-        if let Some(slot) = self.id_slots.get_mut(internal_id as usize) {
+        let idx = internal_id as usize;
+        if let Some(slot) = self.id_slots.get_mut(idx) {
             *slot = None;
         }
+
+        if let Some(embedding) = self.embeddings.get_mut(idx) {
+            *embedding = None;
+        }
+
+        self.mark_ghost(internal_id);
     }
 
     /// Query wrapper that mirrors the linear SoftIndex interface.
@@ -346,6 +451,11 @@ impl<'a> HnswIndex<'a> {
         mode: Similarity,
     ) -> DreamResult<Vec<(EntryId, f32)>> {
         self.search(query, k, mode)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ghost_count_for_mode_test(&self, mode: Similarity) -> usize {
+        self.ghost_count_for_mode(mode)
     }
 }
 
@@ -534,8 +644,67 @@ mod tests {
         }
 
         let query = &embeddings[0].1;
-        let result = index.search(query, 3, Similarity::Cosine);
+        let result = index.search(query, 3, Similarity::Cosine).unwrap();
 
-        assert!(matches!(result, Err(DreamError::IndexCorrupted { .. })));
+        assert!(result.iter().all(|(id, _)| *id != embeddings[0].0));
+        assert!(result.len() <= 3);
+    }
+
+    #[test]
+    fn test_hnsw_incremental_add_after_build() {
+        let embeddings = create_test_embeddings(3, 16);
+        let mut index = HnswIndex::new(16, 3);
+
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
+
+        index.build(Similarity::Cosine).unwrap();
+
+        let new_id = EntryId::new_v4();
+        let new_embedding: Vec<f32> = (0..16).map(|i| (i as f32) * 0.01).collect();
+        index.add(new_id, new_embedding.clone()).unwrap();
+
+        let results = index.search(&new_embedding, 1, Similarity::Cosine).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, new_id);
+    }
+
+    #[test]
+    fn test_hnsw_evict_marks_ghosts_and_rebuilds() {
+        let embeddings = create_test_embeddings(4, 12);
+        let mut index = HnswIndex::new(12, 4);
+
+        for (id, embedding) in embeddings.iter().cloned() {
+            index.add(id, embedding).unwrap();
+        }
+
+        index.build(Similarity::Cosine).unwrap();
+
+        // Remove the second entry
+        let removed_id = embeddings[1].0;
+        let internal = {
+            let map = index.get_mut_id_map();
+            map.remove(&removed_id).unwrap()
+        };
+        index.clear_internal_slot(internal);
+
+        // Search should skip the removed entry and report one ghost for cosine
+        let results = index
+            .search(&embeddings[0].1, 4, Similarity::Cosine)
+            .unwrap();
+        assert!(results.iter().all(|(id, _)| *id != removed_id));
+        assert_eq!(index.ghost_count_for_mode_test(Similarity::Cosine), 1);
+
+        // Rebuild should purge the ghost node
+        index.rebuild_active().unwrap();
+        assert_eq!(index.ghost_count_for_mode_test(Similarity::Cosine), 0);
+
+        let refreshed = index
+            .search(&embeddings[0].1, 3, Similarity::Cosine)
+            .unwrap();
+        assert!(refreshed.iter().all(|(id, _)| *id != removed_id));
+        assert!(refreshed.len() <= 3);
     }
 }

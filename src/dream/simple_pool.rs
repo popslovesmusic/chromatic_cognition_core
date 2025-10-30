@@ -321,7 +321,14 @@ impl SimpleDreamPool {
 
     /// Clear both HNSW and linear indices and reset the eviction counter.
     fn invalidate_indices(&mut self) {
-        self.hnsw_index = None;
+        if let Some(hnsw) = self.hnsw_index.as_mut() {
+            if let Err(err) = hnsw.rebuild_active() {
+                tracing::warn!(
+                    "Failed to refresh HNSW index after eviction churn; continuing with existing graph: {}",
+                    err
+                );
+            }
+        }
         self.soft_index = None;
         self.evictions_since_rebuild = 0;
     }

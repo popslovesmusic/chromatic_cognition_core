@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - ANN Index Stability
+- Enabled incremental updates in `HnswIndex` by inserting new embeddings directly
+  into existing graphs, persisting vectors for deterministic rebuilds, and
+  tracking metric-specific ghost nodes for safe filtering.
+- Updated `SimpleDreamPool` eviction handling to preserve the active `HnswIndex`
+  instance and refresh it in-place, preventing ANN rebuild thrashing during pool
+  churn.
+
 ### Fixed - Dream Pool Diagnostics
 - Logged HNSW construction failures in `SimpleDreamPool::rebuild_soft_index`, ensuring
   ANN fallback decisions capture actionable error details while reverting to the

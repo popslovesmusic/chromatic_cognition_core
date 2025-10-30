@@ -57,6 +57,9 @@
   `[3×12×12×3]` processing unit.
 - HNSW eviction logging was trimmed from the hot path; rebuild instrumentation retains
   detailed diagnostics while routine inserts run without repetitive warnings.
+- HNSW index now performs incremental inserts, tracks per-metric ghost nodes for
+  evicted entries, and rebuilds in place after eviction churn so ANN search stays
+  consistent without destroying the graph.
 <<<<<<< ours
 =======
 - Index stabilization counters gate ANN/soft invalidation until eviction churn exceeds
