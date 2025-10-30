@@ -9,6 +9,7 @@
 use crate::data::ColorClass;
 use crate::dream::simple_pool::DreamEntry;
 use crate::dream::soft_index::EntryId;
+use half::f16;
 use std::collections::HashMap;
 
 /// Weights for hybrid retrieval scoring
@@ -266,7 +267,7 @@ mod tests {
         };
 
         // Create UMS vector for testing (Phase 7)
-        let ums_vector = vec![0.0f32; 512];
+        let ums_vector = vec![f16::from_f32(0.0); 512];
         let hue_category = 0usize;
 
         (

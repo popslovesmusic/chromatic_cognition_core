@@ -4,6 +4,7 @@
 //! to prevent unbounded memory growth in large dream pools.
 
 use crate::dream::simple_pool::DreamEntry;
+use half::f16;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::mem;
@@ -379,10 +380,10 @@ pub fn estimate_entry_size(entry: &DreamEntry) -> usize {
     // Util mean: f32
     size = size.saturating_add(mem::size_of::<f32>());
 
-    // UMS vector: Vec<f32> with 512 elements (Phase 7)
-    let ums_size = entry.ums_vector.len().saturating_mul(mem::size_of::<f32>());
+    // UMS vector: Vec<f16> with 512 elements (Phase 7)
+    let ums_size = entry.ums_vector.len().saturating_mul(mem::size_of::<f16>());
     size = size.saturating_add(ums_size);
-    size = size.saturating_add(mem::size_of::<Vec<f32>>()); // Vec overhead
+    size = size.saturating_add(mem::size_of::<Vec<f16>>()); // Vec overhead
 
     // Hue category: usize (Phase 7)
     size = size.saturating_add(mem::size_of::<usize>());

@@ -757,8 +757,10 @@ fn test_retrieve_by_category() {
         },
     );
 
+    let query_ums = query_entry.ums_vector_as_f32();
+
     // Test retrieve_by_category for category 0
-    let results = pool.retrieve_by_category(0, &query_entry.ums_vector, 3);
+    let results = pool.retrieve_by_category(0, &query_ums, 3);
 
     // Verify all results are from category 0
     for result in &results {
@@ -769,7 +771,7 @@ fn test_retrieve_by_category() {
     }
 
     // Test invalid category (should return empty with warning)
-    let results = pool.retrieve_by_category(12, &query_entry.ums_vector, 3);
+    let results = pool.retrieve_by_category(12, &query_ums, 3);
     assert_eq!(
         results.len(),
         0,
