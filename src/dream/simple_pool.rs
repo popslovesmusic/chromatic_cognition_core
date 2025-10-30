@@ -21,6 +21,7 @@ use crate::solver::SolverResult;
 use crate::spectral::{extract_spectral_features, SpectralFeatures, WindowFunction};
 use crate::tensor::ChromaticTensor;
 use ndarray::{Array3, Array4};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::cmp::Ordering;
@@ -118,33 +119,8 @@ impl DreamEntry {
     ///
     /// Phase 7: UMS vector is computed immediately for Chromatic Semantic Archive.
     pub fn new(tensor: ChromaticTensor, result: SolverResult) -> Self {
-        let chroma_signature = tensor.mean_rgb();
-        let spectral_features = extract_spectral_features(&tensor, WindowFunction::Hann);
-
-        // Phase 7: Compute UMS vector and hue category for CSA
         let mapper = Self::default_modality_mapper();
-        let ums = encode_to_ums(&mapper, &tensor);
-        let ums_vector = ums.components().to_vec();
-
-        // Extract hue from chroma signature and map to category
-        let rgb = chroma_signature;
-        let hue_radians = Self::rgb_to_hue(rgb);
-        let hue_category = mapper.map_hue_to_category(hue_radians);
-
-        Self {
-            tensor,
-            result,
-            chroma_signature,
-            class_label: None,
-            utility: None,
-            timestamp: SystemTime::now(),
-            usage_count: 0,
-            spectral_features,
-            embed: None,
-            util_mean: 0.0,
-            ums_vector,
-            hue_category,
-        }
+        Self::create_with_mapper(&mapper, tensor, result, None)
     }
 
     /// Create a new dream entry with class label (Phase 3B)
@@ -157,24 +133,30 @@ impl DreamEntry {
         result: SolverResult,
         class_label: ColorClass,
     ) -> Self {
+        let mapper = Self::default_modality_mapper();
+        Self::create_with_mapper(&mapper, tensor, result, Some(class_label))
+    }
+
+    fn create_with_mapper(
+        mapper: &ModalityMapper,
+        tensor: ChromaticTensor,
+        result: SolverResult,
+        class_label: Option<ColorClass>,
+    ) -> Self {
         let chroma_signature = tensor.mean_rgb();
         let spectral_features = extract_spectral_features(&tensor, WindowFunction::Hann);
 
-        // Phase 7: Compute UMS vector and hue category for CSA
-        let mapper = Self::default_modality_mapper();
-        let ums = encode_to_ums(&mapper, &tensor);
+        let ums = encode_to_ums(mapper, &tensor);
         let ums_vector = ums.components().to_vec();
 
-        // Extract hue from chroma signature and map to category
-        let rgb = chroma_signature;
-        let hue_radians = Self::rgb_to_hue(rgb);
+        let hue_radians = Self::rgb_to_hue(chroma_signature);
         let hue_category = mapper.map_hue_to_category(hue_radians);
 
         Self {
             tensor,
             result,
             chroma_signature,
-            class_label: Some(class_label),
+            class_label,
             utility: None,
             timestamp: SystemTime::now(),
             usage_count: 0,
@@ -565,8 +547,27 @@ impl SimpleDreamPool {
     }
 
     fn attach_semantic_embedding(&self, entry: &mut DreamEntry) -> Vec<f32> {
-        let ums = encode_to_ums(&self.modality_mapper, &entry.tensor);
+        Self::prepare_entry_embedding(&self.modality_mapper, entry)
+    }
+
+    fn prepare_entry_embedding(mapper: &ModalityMapper, entry: &mut DreamEntry) -> Vec<f32> {
+        if let Some(existing) = entry.embed.clone() {
+            return existing;
+        }
+
+        if !entry.ums_vector.is_empty() {
+            let embedding = entry.ums_vector.clone();
+            entry.embed = Some(embedding.clone());
+            entry.hue_category =
+                mapper.map_hue_to_category(DreamEntry::rgb_to_hue(entry.chroma_signature));
+            return embedding;
+        }
+
+        let ums = encode_to_ums(mapper, &entry.tensor);
         let embedding = ums.components().to_vec();
+        entry.ums_vector = embedding.clone();
+        entry.hue_category =
+            mapper.map_hue_to_category(DreamEntry::rgb_to_hue(entry.chroma_signature));
         entry.embed = Some(embedding.clone());
         embedding
     }
@@ -621,12 +622,31 @@ impl SimpleDreamPool {
 
         hnsw.clear();
 
-        for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter()) {
-            let vector = entry.embed.as_ref().cloned().unwrap_or_else(|| {
-                encode_to_ums(&self.modality_mapper, &entry.tensor)
-                    .components()
-                    .to_vec()
-            });
+        let mapper = self.modality_mapper.clone();
+        let zipped: Vec<(EntryId, &DreamEntry)> = self
+            .entry_ids
+            .iter()
+            .copied()
+            .zip(self.entries.iter())
+            .collect();
+
+        let embeddings: Vec<(EntryId, Vec<f32>)> = zipped
+            .into_par_iter()
+            .map(|(entry_id, entry)| {
+                let vector = entry
+                    .embed
+                    .as_ref()
+                    .cloned()
+                    .or_else(|| (!entry.ums_vector.is_empty()).then(|| entry.ums_vector.clone()))
+                    .unwrap_or_else(|| {
+                        let ums = encode_to_ums(&mapper, &entry.tensor);
+                        ums.components().to_vec()
+                    });
+                (entry_id, vector)
+            })
+            .collect();
+
+        for (entry_id, vector) in embeddings {
             hnsw.add(entry_id, vector)?;
         }
 
@@ -668,11 +688,16 @@ impl SimpleDreamPool {
 
         for entry_id in self.entry_ids.iter().copied() {
             if let Some(entry) = self.id_to_entry.get(&entry_id) {
-                let candidate = entry.embed.as_ref().cloned().unwrap_or_else(|| {
-                    encode_to_ums(&self.modality_mapper, &entry.tensor)
-                        .components()
-                        .to_vec()
-                });
+                let candidate = entry
+                    .embed
+                    .as_ref()
+                    .cloned()
+                    .or_else(|| (!entry.ums_vector.is_empty()).then(|| entry.ums_vector.clone()))
+                    .unwrap_or_else(|| {
+                        encode_to_ums(&self.modality_mapper, &entry.tensor)
+                            .components()
+                            .to_vec()
+                    });
 
                 if candidate.len() != query_embedding.len() {
                     let err = DreamError::critical_state(
@@ -848,7 +873,7 @@ impl SimpleDreamPool {
             return false;
         }
 
-        let mut entry = DreamEntry::new(tensor, result);
+        let mut entry = DreamEntry::create_with_mapper(&self.modality_mapper, tensor, result, None);
         let embedding = self.attach_semantic_embedding(&mut entry);
 
         self.internal_add(entry, embedding)
@@ -859,7 +884,7 @@ impl SimpleDreamPool {
     /// Useful for testing or when coherence filtering is not desired.
     /// Respects memory budget and pool capacity limits.
     pub fn add(&mut self, tensor: ChromaticTensor, result: SolverResult) {
-        let mut entry = DreamEntry::new(tensor, result);
+        let mut entry = DreamEntry::create_with_mapper(&self.modality_mapper, tensor, result, None);
         let embedding = self.attach_semantic_embedding(&mut entry);
 
         let _ = self.internal_add(entry, embedding);
@@ -884,10 +909,54 @@ impl SimpleDreamPool {
             return false;
         }
 
-        let mut entry = DreamEntry::with_class(tensor, result, class_label);
+        let mut entry = DreamEntry::create_with_mapper(
+            &self.modality_mapper,
+            tensor,
+            result,
+            Some(class_label),
+        );
         let embedding = self.attach_semantic_embedding(&mut entry);
 
         self.internal_add(entry, embedding)
+    }
+
+    /// Ingest a batch of dreams, encoding semantic embeddings in parallel.
+    ///
+    /// Returns the number of entries that passed the coherence threshold and
+    /// were inserted into the pool.
+    pub fn add_batch_if_coherent<I>(&mut self, batch: I) -> usize
+    where
+        I: IntoIterator<Item = (ChromaticTensor, SolverResult)>,
+    {
+        let items: Vec<(ChromaticTensor, SolverResult)> = batch.into_iter().collect();
+        if items.is_empty() {
+            return 0;
+        }
+
+        let mapper = self.modality_mapper.clone();
+        let threshold = self.config.coherence_threshold;
+
+        let prepared: Vec<(DreamEntry, Vec<f32>)> = items
+            .into_par_iter()
+            .filter_map(|(tensor, result)| {
+                if result.coherence < threshold {
+                    return None;
+                }
+
+                let mut entry = DreamEntry::create_with_mapper(&mapper, tensor, result, None);
+                let embedding = Self::prepare_entry_embedding(&mapper, &mut entry);
+                Some((entry, embedding))
+            })
+            .collect();
+
+        let mut added = 0usize;
+        for (entry, embedding) in prepared {
+            if self.internal_add(entry, embedding) {
+                added = added.saturating_add(1);
+            }
+        }
+
+        added
     }
 
     /// Retrieve K most similar dreams based on cosine similarity of chroma signatures
@@ -1241,13 +1310,27 @@ impl SimpleDreamPool {
             }
         }
 
-        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::with_capacity(self.entries.len());
-        let mut refreshed_map = HashMap::with_capacity(self.entries.len());
+        let zipped: Vec<(EntryId, DreamEntry)> = self
+            .entry_ids
+            .iter()
+            .copied()
+            .zip(self.entries.iter().cloned())
+            .collect();
 
-        for (entry_id, entry) in self.entry_ids.iter().copied().zip(self.entries.iter()) {
-            let embedding = mapper.encode_entry(entry, bias);
+        let encoded: Vec<(EntryId, Vec<f32>, DreamEntry)> = zipped
+            .into_par_iter()
+            .map(|(entry_id, entry)| {
+                let embedding = mapper.encode_entry(&entry, bias);
+                (entry_id, embedding, entry)
+            })
+            .collect();
+
+        let mut embeddings: Vec<(EntryId, Vec<f32>)> = Vec::with_capacity(encoded.len());
+        let mut refreshed_map = HashMap::with_capacity(encoded.len());
+
+        for (entry_id, embedding, entry) in encoded {
             embeddings.push((entry_id, embedding));
-            refreshed_map.insert(entry_id, entry.clone());
+            refreshed_map.insert(entry_id, entry);
         }
 
         self.id_to_entry = refreshed_map;

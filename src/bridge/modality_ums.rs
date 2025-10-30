@@ -369,7 +369,7 @@ fn safe_sigma(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{config::BridgeConfig, spectral::delta_e94};
+    use crate::{config::BridgeConfig, spectral::delta_e94, tensor::ChromaticTensor};
     use std::f32::consts::TAU;
 
     fn bridge_config() -> BridgeConfig {
@@ -406,6 +406,16 @@ mod tests {
         let idx = UMS_DIM - 1;
         let denormalized = channels[idx] * safe_sigma(stats.sigma[idx]) + stats.mu[idx];
         assert!((denormalized - stats.mu[idx]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn encode_decode_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<UnifiedModalityVector>();
+        assert_send_sync::<ModalityMapper>();
+        assert_send_sync::<fn(&ModalityMapper, &ChromaticTensor) -> UnifiedModalityVector>();
+        assert_send_sync::<fn(&UMSVector) -> [f32; 3]>();
     }
 
     #[test]

@@ -429,6 +429,37 @@ fn test_large_batch_operations() {
     assert!(results.len() <= 10);
 }
 
+/// Test that batch ingestion encodes entries in parallel
+#[test]
+fn test_parallel_batch_ingestion() {
+    let config = PoolConfig::default();
+    let mut pool = SimpleDreamPool::new(config);
+
+    let mut batch = Vec::new();
+    for idx in 0..32 {
+        let tensor = ChromaticTensor::from_seed(idx as u64 + 1, 4, 4, 3);
+        let coherence = if idx % 5 == 0 { 0.2 } else { 0.95 };
+        let result = SolverResult {
+            energy: 0.1,
+            coherence,
+            violation: 0.0,
+            grad: None,
+            mask: None,
+            meta: json!({"idx": idx}),
+        };
+        batch.push((tensor, result));
+    }
+
+    let expected: usize = (0..32).filter(|idx| idx % 5 != 0).count();
+    let added = pool.add_batch_if_coherent(batch);
+
+    assert_eq!(added, expected);
+    assert_eq!(pool.len(), expected);
+
+    let mapper = EmbeddingMapper::new(64);
+    pool.rebuild_soft_index(&mapper, None);
+}
+
 /// Test hybrid scoring weights combination
 #[test]
 fn test_hybrid_scoring_weights() {
