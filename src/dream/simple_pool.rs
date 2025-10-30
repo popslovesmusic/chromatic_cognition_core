@@ -306,18 +306,11 @@ impl SimpleDreamPool {
             budget.add_entry(entry_size);
         }
 
-<<<<<<< ours
-        self.soft_index = None;
-        self.hnsw_index = None;
-=======
         self.maybe_invalidate_indices();
->>>>>>> theirs
 
         true
     }
 
-<<<<<<< ours
-=======
     /// Drop all retrieval indices when eviction churn exceeds the configured threshold.
     fn maybe_invalidate_indices(&mut self) {
         let threshold = self.entries.len() / 10;
@@ -333,7 +326,6 @@ impl SimpleDreamPool {
         self.evictions_since_rebuild = 0;
     }
 
->>>>>>> theirs
     /// Add a dream entry if it meets the coherence threshold
     ///
     /// Returns true if the dream was added, false otherwise.

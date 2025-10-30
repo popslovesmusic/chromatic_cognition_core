@@ -13,6 +13,55 @@ use crate::{
 const UMS_DIM: usize = 512;
 const SPECTRAL_BAND_DIM: usize = 256;
 const HSL_DIM: usize = 128;
+
+#[derive(Clone, Copy, Debug)]
+struct HslSample {
+    hue: f32,
+    saturation: f32,
+    luminance: f32,
+    layer: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HslStats {
+    sin_sum: f32,
+    cos_sum: f32,
+    weight_sum: f32,
+    saturation_sum: f32,
+    luminance_sum: f32,
+    count: usize,
+}
+
+impl HslStats {
+    fn add(&mut self, sample: &HslSample) {
+        let weight = sample.saturation.max(0.0);
+        if weight > 0.0 {
+            self.sin_sum += sample.hue.sin() * weight;
+            self.cos_sum += sample.hue.cos() * weight;
+            self.weight_sum += weight;
+        }
+        self.saturation_sum += sample.saturation;
+        self.luminance_sum += sample.luminance;
+        self.count += 1;
+    }
+
+    fn means(&self) -> Option<(f32, f32, f32)> {
+        if self.count == 0 {
+            return None;
+        }
+        let hue = if self.weight_sum <= f32::EPSILON {
+            0.0
+        } else {
+            (self.sin_sum / self.weight_sum)
+                .atan2(self.cos_sum / self.weight_sum)
+                .rem_euclid(TAU)
+        };
+        let inv = 1.0 / self.count as f32;
+        let saturation = (self.saturation_sum * inv).clamp(0.0, 1.0);
+        let luminance = (self.luminance_sum * inv).clamp(0.0, 1.0);
+        Some((hue, saturation, luminance))
+    }
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct UnifiedModalityVector {
     channels: Vec<f32>,
@@ -157,18 +206,80 @@ fn downsample_bins(bins: &[f32]) -> [f32; SPECTRAL_BAND_DIM] {
 }
 
 fn encode_hsl_block(block: &mut [f32], tensor: &ChromaticTensor) {
+    for value in block.iter_mut() {
+        *value = 0.0;
+    }
+
     let mean_rgb = tensor.mean_rgb();
-    let (h, s, l) = rgb_to_hsl(mean_rgb);
-    let hue_radians = (h * TAU).rem_euclid(TAU);
+    let (mean_h_norm, mean_s, mean_l) = rgb_to_hsl(mean_rgb);
+    let mean_h = canonical_hue((mean_h_norm * TAU).rem_euclid(TAU));
     if !block.is_empty() {
-        block[0] = (hue_radians / PI) - 1.0;
+        block[0] = (mean_h / PI) - 1.0;
     }
     if block.len() > 1 {
-        block[1] = s.clamp(0.0, 1.0);
+        block[1] = mean_s.clamp(0.0, 1.0);
     }
     if block.len() > 2 {
-        block[2] = l.clamp(0.0, 1.0);
+        block[2] = mean_l.clamp(0.0, 1.0);
     }
+
+    let samples = extract_hsl_samples(tensor);
+    if samples.is_empty() {
+        return;
+    }
+
+    let (_, _, layers, _) = tensor.shape();
+    let mut per_layer = vec![HslStats::default(); layers.max(1)];
+
+    for sample in &samples {
+        if let Some(layer_stats) = per_layer.get_mut(sample.layer) {
+            layer_stats.add(sample);
+        }
+    }
+
+    let contexts = per_layer.len().min(3);
+    for layer in 0..contexts {
+        if let Some((h, s, l)) = per_layer[layer].means() {
+            let offset = 3 + layer * 3;
+            if block.len() > offset {
+                block[offset] = (h / PI) - 1.0;
+            }
+            if block.len() > offset + 1 {
+                block[offset + 1] = s;
+            }
+            if block.len() > offset + 2 {
+                block[offset + 2] = l;
+            }
+        }
+    }
+}
+
+fn extract_hsl_samples(tensor: &ChromaticTensor) -> Vec<HslSample> {
+    let (rows, cols, layers, channels) = tensor.shape();
+    debug_assert_eq!(channels, 3, "chromatic tensor must store RGB channels");
+
+    let mut samples = Vec::with_capacity(rows * cols * layers);
+    for layer in 0..layers {
+        for row in 0..rows {
+            for col in 0..cols {
+                let rgb = [
+                    tensor.colors[[row, col, layer, 0]],
+                    tensor.colors[[row, col, layer, 1]],
+                    tensor.colors[[row, col, layer, 2]],
+                ];
+                let (h_norm, saturation, luminance) = rgb_to_hsl(rgb);
+                let hue = canonical_hue((h_norm * TAU).rem_euclid(TAU));
+                samples.push(HslSample {
+                    hue,
+                    saturation,
+                    luminance,
+                    layer,
+                });
+            }
+        }
+    }
+
+    samples
 }
 
 fn rgb_to_hsl(rgb: [f32; 3]) -> (f32, f32, f32) {
@@ -293,5 +404,75 @@ mod tests {
 
         let expected_category = mapper.map_hue_to_category(expected_h_rad);
         assert_eq!(category, expected_category);
+    }
+
+    #[test]
+    fn hsl_feature_extraction_scans_full_grid() {
+        let mut tensor = ChromaticTensor::new(3, 12, 12);
+        for layer in 0..12 {
+            for row in 0..3 {
+                for col in 0..12 {
+                    let base = (row + col + layer) as f32 / 27.0;
+                    tensor.colors[[row, col, layer, 0]] = (base % 1.0).clamp(0.0, 1.0);
+                    tensor.colors[[row, col, layer, 1]] = ((base * 0.5) % 1.0).clamp(0.0, 1.0);
+                    tensor.colors[[row, col, layer, 2]] = ((base * 0.25) % 1.0).clamp(0.0, 1.0);
+                }
+            }
+        }
+
+        let samples = extract_hsl_samples(&tensor);
+        assert_eq!(samples.len(), 3 * 12 * 12);
+
+        let mut layer_counts = [0usize; 12];
+        for sample in samples {
+            layer_counts[sample.layer] += 1;
+        }
+
+        for count in layer_counts {
+            assert_eq!(count, 3 * 12);
+        }
+    }
+
+    #[test]
+    fn encode_hsl_block_preserves_contextual_statistics() {
+        let mut tensor = ChromaticTensor::new(3, 12, 12);
+        let colors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+
+        for layer in 0..12 {
+            let color = colors.get(layer).copied().unwrap_or([0.5, 0.5, 0.5]);
+            for row in 0..3 {
+                for col in 0..12 {
+                    for channel in 0..3 {
+                        tensor.colors[[row, col, layer, channel]] = color[channel];
+                    }
+                }
+            }
+        }
+
+        let mut block = [0.0f32; HSL_DIM];
+        encode_hsl_block(&mut block, &tensor);
+
+        assert!((block[0] + 1.0).abs() < 1e-6);
+        assert!(block[1].abs() < 1e-6);
+        assert!((block[2] - (11.0 / 24.0)).abs() < 1e-6);
+
+        let red_offset = 3;
+        assert!((block[red_offset] + 1.0).abs() < 1e-6);
+        assert!((block[red_offset + 1] - 1.0).abs() < 1e-6);
+        assert!((block[red_offset + 2] - 0.5).abs() < 1e-6);
+
+        let green_offset = 6;
+        assert!((block[green_offset] + 1.0 / 3.0).abs() < 1e-6);
+        assert!((block[green_offset + 1] - 1.0).abs() < 1e-6);
+        assert!((block[green_offset + 2] - 0.5).abs() < 1e-6);
+
+        let blue_offset = 9;
+        assert!((block[blue_offset] - 1.0 / 3.0).abs() < 1e-6);
+        assert!((block[blue_offset + 1] - 1.0).abs() < 1e-6);
+        assert!((block[blue_offset + 2] - 0.5).abs() < 1e-6);
     }
 }

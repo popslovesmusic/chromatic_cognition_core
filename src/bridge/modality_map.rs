@@ -52,13 +52,26 @@ impl ModalityMapper {
     pub fn map_hue_to_category(&self, hue_radians: f32) -> usize {
         let categories = self.config.spectral.categorical_count.max(1);
         let canonical = canonical_hue(hue_radians);
-        let normalized = (canonical / std::f32::consts::TAU).clamp(0.0, 0.999_999);
-        let scaled = normalized.mul_add(categories as f32, f32::EPSILON * 128.0);
-        let mut index = scaled.floor() as usize;
-        if index >= categories {
-            index = categories - 1;
+        let step = std::f32::consts::TAU / categories as f32;
+
+        if categories > 1 && canonical >= std::f32::consts::TAU - (step * 0.5) {
+            return categories - 1;
         }
-        index
+
+        let mut closest = 0usize;
+        let mut min_distance = f32::MAX;
+
+        for idx in 0..categories {
+            let target = step * idx as f32;
+            let diff = (canonical - target).abs();
+            let distance = diff.min(std::f32::consts::TAU - diff);
+            if distance < min_distance {
+                min_distance = distance;
+                closest = idx;
+            }
+        }
+
+        closest
     }
 }
 
